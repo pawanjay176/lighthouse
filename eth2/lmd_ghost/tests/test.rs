@@ -10,17 +10,14 @@ use beacon_chain::test_utils::{
 use lmd_ghost::{LmdGhost, ThreadSafeReducedTree as BaseThreadSafeReducedTree};
 use rand::{prelude::*, rngs::StdRng};
 use std::sync::Arc;
-use store::{
-    iter::{AncestorIter, BlockRootsIterator},
-    MemoryStore, Store,
-};
+use store::{iter::AncestorIter, MemoryStore, Store};
 use types::{BeaconBlock, EthSpec, Hash256, MinimalEthSpec, Slot};
 
 // Should ideally be divisible by 3.
 pub const VALIDATOR_COUNT: usize = 3 * 8;
 
 type TestEthSpec = MinimalEthSpec;
-type ThreadSafeReducedTree = BaseThreadSafeReducedTree<MemoryStore, TestEthSpec>;
+type ThreadSafeReducedTree = BaseThreadSafeReducedTree<MemoryStore<TestEthSpec>, TestEthSpec>;
 type BeaconChainHarness = BaseBeaconChainHarness<HarnessType<TestEthSpec>>;
 type RootAndSlot = (Hash256, Slot);
 
@@ -45,7 +42,9 @@ struct ForkedHarness {
     pub genesis_block: BeaconBlock<TestEthSpec>,
     pub honest_head: RootAndSlot,
     pub faulty_head: RootAndSlot,
+    /// Honest roots in reverse order (slot high to low)
     pub honest_roots: Vec<RootAndSlot>,
+    /// Faulty roots in reverse order (slot high to low)
     pub faulty_roots: Vec<RootAndSlot>,
 }
 
@@ -84,16 +83,14 @@ impl ForkedHarness {
             faulty_fork_blocks,
         );
 
-        let mut honest_roots =
-            get_ancestor_roots::<TestEthSpec, _>(harness.chain.store.clone(), honest_head);
+        let mut honest_roots = get_ancestor_roots(harness.chain.store.clone(), honest_head);
 
         honest_roots.insert(
             0,
             (honest_head, get_slot_for_block_root(&harness, honest_head)),
         );
 
-        let mut faulty_roots =
-            get_ancestor_roots::<TestEthSpec, _>(harness.chain.store.clone(), faulty_head);
+        let mut faulty_roots = get_ancestor_roots(harness.chain.store.clone(), faulty_head);
 
         faulty_roots.insert(
             0,
@@ -119,7 +116,7 @@ impl ForkedHarness {
         }
     }
 
-    pub fn store_clone(&self) -> MemoryStore {
+    pub fn store_clone(&self) -> MemoryStore<TestEthSpec> {
         (*self.harness.chain.store).clone()
     }
 
@@ -129,7 +126,7 @@ impl ForkedHarness {
         //
         // Taking a clone here ensures that each fork choice gets it's own store so there is no
         // cross-contamination between tests.
-        let store: MemoryStore = self.store_clone();
+        let store: MemoryStore<TestEthSpec> = self.store_clone();
 
         ThreadSafeReducedTree::new(
             Arc::new(store),
@@ -153,7 +150,7 @@ impl ForkedHarness {
 }
 
 /// Helper: returns all the ancestor roots and slots for a given block_root.
-fn get_ancestor_roots<E: EthSpec, U: Store>(
+fn get_ancestor_roots<U: Store<TestEthSpec>>(
     store: Arc<U>,
     block_root: Hash256,
 ) -> Vec<(Hash256, Slot)> {
@@ -162,11 +159,9 @@ fn get_ancestor_roots<E: EthSpec, U: Store>(
         .expect("block should exist")
         .expect("store should not error");
 
-    <BeaconBlock<TestEthSpec> as AncestorIter<_, BlockRootsIterator<TestEthSpec, _>>>::try_iter_ancestor_roots(
-        &block, store,
-    )
-    .expect("should be able to create ancestor iter")
-    .collect()
+    <BeaconBlock<TestEthSpec> as AncestorIter<_, _, _>>::try_iter_ancestor_roots(&block, store)
+        .expect("should be able to create ancestor iter")
+        .collect()
 }
 
 /// Helper: returns the slot for some block_root.
@@ -225,7 +220,7 @@ fn single_voter_persistent_instance_reverse_order() {
         "New tree should have integrity"
     );
 
-    for (root, slot) in harness.honest_roots.iter().rev() {
+    for (root, slot) in &harness.honest_roots {
         lmd.process_attestation(0, *root, *slot)
             .expect("fork choice should accept attestations to honest roots in reverse");
 
@@ -237,11 +232,15 @@ fn single_voter_persistent_instance_reverse_order() {
     }
 
     // The honest head should be selected.
-    let (head_root, head_slot) = harness.honest_roots.first().unwrap();
-    let (finalized_root, _) = harness.honest_roots.last().unwrap();
+    let (head_root, _) = harness.honest_roots.first().unwrap();
+    let (finalized_root, finalized_slot) = harness.honest_roots.last().unwrap();
 
     assert_eq!(
-        lmd.find_head(*head_slot, *finalized_root, ForkedHarness::weight_function),
+        lmd.find_head(
+            *finalized_slot,
+            *finalized_root,
+            ForkedHarness::weight_function
+        ),
         Ok(*head_root),
         "Honest head should be selected"
     );
@@ -253,7 +252,7 @@ fn single_voter_persistent_instance_reverse_order() {
 fn single_voter_many_instance_honest_blocks_voting_forwards() {
     let harness = &FORKED_HARNESS;
 
-    for (root, slot) in &harness.honest_roots {
+    for (root, slot) in harness.honest_roots.iter().rev() {
         let lmd = harness.new_fork_choice();
         lmd.process_attestation(0, *root, *slot)
             .expect("fork choice should accept attestations to honest roots");
@@ -272,7 +271,7 @@ fn single_voter_many_instance_honest_blocks_voting_in_reverse() {
     let harness = &FORKED_HARNESS;
 
     // Same as above, but in reverse order (votes on the highest honest block first).
-    for (root, slot) in harness.honest_roots.iter().rev() {
+    for (root, slot) in &harness.honest_roots {
         let lmd = harness.new_fork_choice();
         lmd.process_attestation(0, *root, *slot)
             .expect("fork choice should accept attestations to honest roots in reverse");
@@ -291,7 +290,7 @@ fn single_voter_many_instance_honest_blocks_voting_in_reverse() {
 fn single_voter_many_instance_faulty_blocks_voting_forwards() {
     let harness = &FORKED_HARNESS;
 
-    for (root, slot) in &harness.faulty_roots {
+    for (root, slot) in harness.faulty_roots.iter().rev() {
         let lmd = harness.new_fork_choice();
         lmd.process_attestation(0, *root, *slot)
             .expect("fork choice should accept attestations to faulty roots");
@@ -309,7 +308,7 @@ fn single_voter_many_instance_faulty_blocks_voting_forwards() {
 fn single_voter_many_instance_faulty_blocks_voting_in_reverse() {
     let harness = &FORKED_HARNESS;
 
-    for (root, slot) in harness.faulty_roots.iter().rev() {
+    for (root, slot) in &harness.faulty_roots {
         let lmd = harness.new_fork_choice();
         lmd.process_attestation(0, *root, *slot)
             .expect("fork choice should accept attestations to faulty roots in reverse");
@@ -318,6 +317,44 @@ fn single_voter_many_instance_faulty_blocks_voting_in_reverse() {
             lmd.verify_integrity(),
             Ok(()),
             "Tree integrity should be maintained whilst processing attestations"
+        );
+    }
+}
+
+/// Ensure that votes with slots before the justified slot are not counted.
+#[test]
+fn discard_votes_before_justified_slot() {
+    let harness = &FORKED_HARNESS;
+
+    let lmd = harness.new_fork_choice();
+
+    let (genesis_root, genesis_slot) = *harness.honest_roots.last().unwrap();
+
+    // Add attestations from all validators for all honest blocks.
+    for (root, slot) in harness.honest_roots.iter().rev() {
+        for i in 0..VALIDATOR_COUNT {
+            lmd.process_attestation(i, *root, *slot)
+                .expect("should accept attestations in increasing order");
+        }
+
+        // Head starting from 0 checkpoint (genesis) should be current root
+        assert_eq!(
+            lmd.find_head(genesis_slot, genesis_root, ForkedHarness::weight_function),
+            Ok(*root),
+            "Honest head should be selected"
+        );
+
+        // Head from one slot after genesis should still be genesis, because the successor
+        // block of the genesis block has slot `genesis_slot + 1` which isn't greater than
+        // the slot we're starting from. This is a very artifical test, but one that's easy to
+        // describe.
+        assert_eq!(
+            lmd.find_head(
+                genesis_slot + 1,
+                genesis_root,
+                ForkedHarness::weight_function
+            ),
+            Ok(genesis_root)
         );
     }
 }

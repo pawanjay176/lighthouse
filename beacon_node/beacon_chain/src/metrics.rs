@@ -48,10 +48,6 @@ lazy_static! {
         "beacon_block_processing_fork_choice_register_seconds",
         "Time spent registering the new block with fork choice (but not finding head)"
     );
-    pub static ref BLOCK_PROCESSING_FORK_CHOICE_FIND_HEAD: Result<Histogram> = try_create_histogram(
-        "beacon_block_processing_fork_choice_find_head_seconds",
-        "Time spent finding the new head after processing a new block"
-    );
 
     /*
      * Block Production
@@ -150,6 +146,20 @@ lazy_static! {
         try_create_histogram("beacon_persist_chain", "Time taken to update the canonical head");
 
     /*
+     * Checkpoint cache
+     */
+    pub static ref CHECKPOINT_CACHE_HITS: Result<IntCounter> =
+        try_create_int_counter("beacon_checkpoint_cache_hits_total", "Count of times checkpoint cache fulfils request");
+    pub static ref CHECKPOINT_CACHE_MISSES: Result<IntCounter> =
+        try_create_int_counter("beacon_checkpoint_cache_misses_total", "Count of times checkpoint cache fulfils request");
+
+    /*
+     * Eth1
+     */
+    pub static ref JUNK_ETH1_VOTES: Result<IntCounter> =
+        try_create_int_counter("beacon_eth1_junk_votes", "Count of times we have voted junk for eth1 dat");
+
+    /*
      * Chain Head
      */
     pub static ref UPDATE_HEAD_TIMES: Result<Histogram> =
@@ -172,8 +182,6 @@ lazy_static! {
         try_create_int_gauge("beacon_head_state_finalized_root", "Finalized root at the head of the chain");
     pub static ref HEAD_STATE_FINALIZED_EPOCH: Result<IntGauge> =
         try_create_int_gauge("beacon_head_state_finalized_epoch", "Finalized epoch at the head of the chain");
-    pub static ref HEAD_STATE_SHARDS: Result<IntGauge> =
-        try_create_int_gauge("beacon_head_state_shard_total", "Count of shards in the beacon chain");
     pub static ref HEAD_STATE_TOTAL_VALIDATORS: Result<IntGauge> =
         try_create_int_gauge("beacon_head_state_total_validators_total", "Count of validators at the head of the chain");
     pub static ref HEAD_STATE_ACTIVE_VALIDATORS: Result<IntGauge> =
@@ -191,10 +199,9 @@ lazy_static! {
 /// Scrape the `beacon_chain` for metrics that are not constantly updated (e.g., the present slot,
 /// head state info, etc) and update the Prometheus `DEFAULT_REGISTRY`.
 pub fn scrape_for_metrics<T: BeaconChainTypes>(beacon_chain: &BeaconChain<T>) {
-    scrape_head_state::<T>(
-        &beacon_chain.head().beacon_state,
-        beacon_chain.head().beacon_state_root,
-    );
+    if let Ok(head) = beacon_chain.head() {
+        scrape_head_state::<T>(&head.beacon_state, head.beacon_state_root)
+    }
 }
 
 /// Scrape the given `state` assuming it's the head state, updating the `DEFAULT_REGISTRY`.
@@ -226,7 +233,6 @@ fn scrape_head_state<T: BeaconChainTypes>(state: &BeaconState<T::EthSpec>, state
         &HEAD_STATE_FINALIZED_EPOCH,
         state.finalized_checkpoint.epoch,
     );
-    set_gauge_by_usize(&HEAD_STATE_SHARDS, state.previous_crosslinks.len());
     set_gauge_by_usize(&HEAD_STATE_TOTAL_VALIDATORS, state.validators.len());
     set_gauge_by_u64(&HEAD_STATE_VALIDATOR_BALANCES, state.balances.iter().sum());
     set_gauge_by_usize(

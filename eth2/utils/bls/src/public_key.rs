@@ -2,7 +2,7 @@ use super::{SecretKey, BLS_PUBLIC_KEY_BYTE_SIZE};
 use milagro_bls::PublicKey as RawPublicKey;
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
-use serde_hex::{encode as hex_encode, HexVisitor};
+use serde_hex::{encode as hex_encode, PrefixedHexVisitor};
 use ssz::{Decode, DecodeError, Encode};
 use std::default;
 use std::fmt;
@@ -81,7 +81,7 @@ impl fmt::Display for PublicKey {
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_hex_string())
+        write!(f, "0x{}", self.as_hex_string())
     }
 }
 
@@ -94,7 +94,7 @@ impl default::Default for PublicKey {
 
 impl_ssz!(PublicKey, BLS_PUBLIC_KEY_BYTE_SIZE, "PublicKey");
 
-impl_tree_hash!(PublicKey, U48);
+impl_tree_hash!(PublicKey, BLS_PUBLIC_KEY_BYTE_SIZE);
 
 impl Serialize for PublicKey {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -110,7 +110,7 @@ impl<'de> Deserialize<'de> for PublicKey {
     where
         D: Deserializer<'de>,
     {
-        let bytes = deserializer.deserialize_str(HexVisitor)?;
+        let bytes = deserializer.deserialize_str(PrefixedHexVisitor)?;
         let pubkey = Self::from_ssz_bytes(&bytes[..])
             .map_err(|e| serde::de::Error::custom(format!("invalid pubkey ({:?})", e)))?;
         Ok(pubkey)

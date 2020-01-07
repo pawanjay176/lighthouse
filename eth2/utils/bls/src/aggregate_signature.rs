@@ -5,7 +5,7 @@ use milagro_bls::{
 };
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
-use serde_hex::{encode as hex_encode, HexVisitor};
+use serde_hex::{encode as hex_encode, PrefixedHexVisitor};
 use ssz::{Decode, DecodeError, Encode};
 
 /// A BLS aggregate signature.
@@ -155,7 +155,7 @@ impl_ssz!(
     "AggregateSignature"
 );
 
-impl_tree_hash!(AggregateSignature, U96);
+impl_tree_hash!(AggregateSignature, BLS_AGG_SIG_BYTE_SIZE);
 
 impl Serialize for AggregateSignature {
     /// Serde serialization is compliant the Ethereum YAML test format.
@@ -173,7 +173,7 @@ impl<'de> Deserialize<'de> for AggregateSignature {
     where
         D: Deserializer<'de>,
     {
-        let bytes = deserializer.deserialize_str(HexVisitor)?;
+        let bytes = deserializer.deserialize_str(PrefixedHexVisitor)?;
         let agg_sig = AggregateSignature::from_ssz_bytes(&bytes)
             .map_err(|e| serde::de::Error::custom(format!("invalid ssz ({:?})", e)))?;
 

@@ -1,6 +1,6 @@
 use crate::{
     builder::{BeaconChainBuilder, Witness},
-    eth1_chain::JsonRpcEth1Backend,
+    eth1_chain::CachingEth1Backend,
     events::NullEventHandler,
     AttestationProcessingOutcome, BeaconChain, BeaconChainTypes, BlockProcessingOutcome,
 };
@@ -12,27 +12,36 @@ use slot_clock::TestingSlotClock;
 use state_processing::per_slot_processing;
 use std::sync::Arc;
 use std::time::Duration;
-use store::MemoryStore;
+use store::{
+    migrate::{BlockingMigrator, NullMigrator},
+    DiskStore, MemoryStore, Migrate, Store,
+};
 use tree_hash::{SignedRoot, TreeHash};
 use types::{
-    AggregateSignature, Attestation, AttestationDataAndCustodyBit, BeaconBlock, BeaconState,
-    BitList, ChainSpec, Domain, EthSpec, Hash256, Keypair, RelativeEpoch, SecretKey, Signature,
-    Slot,
+    AggregateSignature, Attestation, BeaconBlock, BeaconState, BitList, ChainSpec, Domain, EthSpec,
+    Hash256, Keypair, SecretKey, Signature, Slot,
 };
 
 pub use crate::persisted_beacon_chain::{PersistedBeaconChain, BEACON_CHAIN_DB_KEY};
 pub use types::test_utils::generate_deterministic_keypairs;
 
-pub const HARNESS_GENESIS_TIME: u64 = 1_567_552_690; // 4th September 2019
+// 4th September 2019
+pub const HARNESS_GENESIS_TIME: u64 = 1_567_552_690;
+// This parameter is required by a builder but not used because we use the `TestingSlotClock`.
+pub const HARNESS_SLOT_TIME: Duration = Duration::from_secs(1);
 
-pub type HarnessType<E> = Witness<
-    MemoryStore,
+pub type BaseHarnessType<TStore, TStoreMigrator, TEthSpec> = Witness<
+    TStore,
+    TStoreMigrator,
     TestingSlotClock,
-    ThreadSafeReducedTree<MemoryStore, E>,
-    JsonRpcEth1Backend<E>,
-    E,
-    NullEventHandler<E>,
+    ThreadSafeReducedTree<TStore, TEthSpec>,
+    CachingEth1Backend<TEthSpec, TStore>,
+    TEthSpec,
+    NullEventHandler<TEthSpec>,
 >;
+
+pub type HarnessType<E> = BaseHarnessType<MemoryStore<E>, NullMigrator, E>;
+pub type DiskHarnessType<E> = BaseHarnessType<DiskStore<E>, BlockingMigrator<DiskStore<E>>, E>;
 
 /// Indicates how the `BeaconChainHarness` should produce blocks.
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +92,7 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
             .logger(log.clone())
             .custom_spec(spec.clone())
             .store(Arc::new(MemoryStore::open()))
+            .store_migrator(NullMigrator)
             .genesis_state(
                 interop_genesis_state::<E>(&keypairs, HARNESS_GENESIS_TIME, &spec)
                     .expect("should generate interop state"),
@@ -91,9 +101,51 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
             .dummy_eth1_backend()
             .expect("should build dummy backend")
             .null_event_handler()
-            .testing_slot_clock(Duration::from_secs(1))
+            .testing_slot_clock(HARNESS_SLOT_TIME)
             .expect("should configure testing slot clock")
-            .empty_reduced_tree_fork_choice()
+            .reduced_tree_fork_choice()
+            .expect("should add fork choice to builder")
+            .build()
+            .expect("should build");
+
+        Self {
+            spec: chain.spec.clone(),
+            chain,
+            keypairs,
+        }
+    }
+}
+
+impl<E: EthSpec> BeaconChainHarness<DiskHarnessType<E>> {
+    /// Instantiate a new harness with `validator_count` initial validators.
+    pub fn new_with_disk_store(
+        eth_spec_instance: E,
+        store: Arc<DiskStore<E>>,
+        keypairs: Vec<Keypair>,
+    ) -> Self {
+        let spec = E::default_spec();
+
+        let log = TerminalLoggerBuilder::new()
+            .level(Severity::Warning)
+            .build()
+            .expect("logger should build");
+
+        let chain = BeaconChainBuilder::new(eth_spec_instance)
+            .logger(log.clone())
+            .custom_spec(spec.clone())
+            .store(store.clone())
+            .store_migrator(<BlockingMigrator<_> as Migrate<_, E>>::new(store))
+            .genesis_state(
+                interop_genesis_state::<E>(&keypairs, HARNESS_GENESIS_TIME, &spec)
+                    .expect("should generate interop state"),
+            )
+            .expect("should build state using recent genesis")
+            .dummy_eth1_backend()
+            .expect("should build dummy backend")
+            .null_event_handler()
+            .testing_slot_clock(HARNESS_SLOT_TIME)
+            .expect("should configure testing slot clock")
+            .reduced_tree_fork_choice()
             .expect("should add fork choice to builder")
             .build()
             .expect("should build");
@@ -105,6 +157,50 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
         }
     }
 
+    /// Instantiate a new harness with `validator_count` initial validators.
+    pub fn resume_from_disk_store(
+        eth_spec_instance: E,
+        store: Arc<DiskStore<E>>,
+        keypairs: Vec<Keypair>,
+    ) -> Self {
+        let spec = E::default_spec();
+
+        let log = TerminalLoggerBuilder::new()
+            .level(Severity::Warning)
+            .build()
+            .expect("logger should build");
+
+        let chain = BeaconChainBuilder::new(eth_spec_instance)
+            .logger(log.clone())
+            .custom_spec(spec.clone())
+            .store(store.clone())
+            .store_migrator(<BlockingMigrator<_> as Migrate<_, E>>::new(store))
+            .resume_from_db()
+            .expect("should resume beacon chain from db")
+            .dummy_eth1_backend()
+            .expect("should build dummy backend")
+            .null_event_handler()
+            .testing_slot_clock(Duration::from_secs(1))
+            .expect("should configure testing slot clock")
+            .reduced_tree_fork_choice()
+            .expect("should add fork choice to builder")
+            .build()
+            .expect("should build");
+
+        Self {
+            spec: chain.spec.clone(),
+            chain,
+            keypairs,
+        }
+    }
+}
+
+impl<S, M, E> BeaconChainHarness<BaseHarnessType<S, M, E>>
+where
+    S: Store<E>,
+    M: Migrate<S, E>,
+    E: EthSpec,
+{
     /// Advance the slot of the `BeaconChain`.
     ///
     /// Does not produce blocks or attestations.
@@ -162,6 +258,8 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
                 .process_block(block)
                 .expect("should not error during block processing");
 
+            self.chain.fork_choice().expect("should find head");
+
             if let BlockProcessingOutcome::Processed { block_root } = outcome {
                 head_block_root = Some(block_root);
 
@@ -189,7 +287,7 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
         }
 
         while state.slot < slot {
-            per_slot_processing(&mut state, &self.spec)
+            per_slot_processing(&mut state, None, &self.spec)
                 .expect("should be able to advance state to slot");
         }
 
@@ -203,7 +301,7 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
                 .block_proposer(slot)
                 .expect("should get block proposer from chain"),
             _ => state
-                .get_beacon_proposer_index(slot, RelativeEpoch::Current, &self.spec)
+                .get_beacon_proposer_index(slot, &self.spec)
                 .expect("should get block proposer from state"),
         };
 
@@ -280,13 +378,13 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
         let mut attestations = vec![];
 
         state
-            .get_crosslink_committees_at_slot(state.slot)
+            .get_beacon_committees_at_slot(state.slot)
             .expect("should get committees")
             .iter()
-            .for_each(|cc| {
-                let committee_size = cc.committee.len();
+            .for_each(|bc| {
+                let committee_size = bc.committee.len();
 
-                let mut local_attestations: Vec<Attestation<E>> = cc
+                let mut local_attestations: Vec<Attestation<E>> = bc
                     .committee
                     .par_iter()
                     .enumerate()
@@ -297,7 +395,7 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
                             let data = self
                                 .chain
                                 .produce_attestation_data_for_block(
-                                    cc.shard,
+                                    bc.index,
                                     head_block_root,
                                     head_block_slot,
                                     state,
@@ -309,18 +407,15 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
                             aggregation_bits
                                 .set(i, true)
                                 .expect("should be able to set aggregation bits");
-                            let custody_bits = BitList::with_capacity(committee_size)
-                                .expect("should make custody bits");
 
                             let signature = {
-                                let message = AttestationDataAndCustodyBit {
-                                    data: data.clone(),
-                                    custody_bit: false,
-                                }
-                                .tree_hash_root();
+                                let message = data.tree_hash_root();
 
-                                let domain =
-                                    spec.get_domain(data.target.epoch, Domain::Attestation, fork);
+                                let domain = spec.get_domain(
+                                    data.target.epoch,
+                                    Domain::BeaconAttester,
+                                    fork,
+                                );
 
                                 let mut agg_sig = AggregateSignature::new();
                                 agg_sig.add(&Signature::new(
@@ -335,7 +430,6 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
                             let attestation = Attestation {
                                 aggregation_bits,
                                 data,
-                                custody_bits,
                                 signature,
                             };
 
@@ -367,7 +461,12 @@ impl<E: EthSpec> BeaconChainHarness<HarnessType<E>> {
         honest_fork_blocks: usize,
         faulty_fork_blocks: usize,
     ) -> (Hash256, Hash256) {
-        let initial_head_slot = self.chain.head().beacon_block.slot;
+        let initial_head_slot = self
+            .chain
+            .head()
+            .expect("should get head")
+            .beacon_block
+            .slot;
 
         // Move to the next slot so we may produce some more blocks on the head.
         self.advance_slot();

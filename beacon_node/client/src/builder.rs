@@ -1,52 +1,65 @@
 use crate::config::{ClientGenesis, Config as ClientConfig};
+use crate::notifier::spawn_notifier;
 use crate::Client;
 use beacon_chain::{
     builder::{BeaconChainBuilder, Witness},
-    eth1_chain::JsonRpcEth1Backend,
+    eth1_chain::CachingEth1Backend,
     lmd_ghost::ThreadSafeReducedTree,
     slot_clock::{SlotClock, SystemTimeSlotClock},
-    store::{DiskStore, MemoryStore, Store},
+    store::{
+        migrate::{BackgroundMigrator, Migrate, NullMigrator},
+        DiskStore, MemoryStore, SimpleDiskStore, Store,
+    },
     BeaconChain, BeaconChainTypes, Eth1ChainBackend, EventHandler,
 };
 use environment::RuntimeContext;
-use eth1::Config as Eth1Config;
+use eth1::{Config as Eth1Config, Service as Eth1Service};
 use eth2_config::Eth2Config;
 use exit_future::Signal;
-use futures::{future, Future, IntoFuture, Stream};
+use futures::{future, Future, IntoFuture};
 use genesis::{
     generate_deterministic_keypairs, interop_genesis_state, state_from_ssz_file, Eth1GenesisService,
 };
 use lighthouse_bootstrap::Bootstrapper;
 use lmd_ghost::LmdGhost;
 use network::{NetworkConfig, NetworkMessage, Service as NetworkService};
-use rpc::Config as RpcConfig;
-use slog::{debug, error, info, warn};
+use slog::info;
+use ssz::Decode;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::timer::Interval;
-use types::{ChainSpec, EthSpec};
+use types::{BeaconState, ChainSpec, EthSpec};
 use websocket_server::{Config as WebSocketConfig, WebSocketSender};
 
-/// The interval between notifier events.
-pub const NOTIFIER_INTERVAL_SECONDS: u64 = 15;
-/// Create a warning log whenever the peer count is at or below this value.
-pub const WARN_PEER_COUNT: usize = 1;
 /// Interval between polling the eth1 node for genesis information.
-pub const ETH1_GENESIS_UPDATE_INTERVAL_MILLIS: u64 = 500;
+pub const ETH1_GENESIS_UPDATE_INTERVAL_MILLIS: u64 = 7_000;
 
+/// Builds a `Client` instance.
+///
+/// ## Notes
+///
+/// The builder may start some services (e.g.., libp2p, http server) immediately after they are
+/// initialized, _before_ the `self.build(..)` method has been called.
+///
+/// Types may be elided and the compiler will infer them once all required methods have been
+/// called.
+///
+/// If type inference errors are raised, ensure all necessary components have been initialized. For
+/// example, the compiler will be unable to infer `T::Store` unless `self.disk_store(..)` or
+/// `self.memory_store(..)` has been called.
 pub struct ClientBuilder<T: BeaconChainTypes> {
     slot_clock: Option<T::SlotClock>,
     store: Option<Arc<T::Store>>,
+    store_migrator: Option<T::StoreMigrator>,
     runtime_context: Option<RuntimeContext<T::EthSpec>>,
     chain_spec: Option<ChainSpec>,
     beacon_chain_builder: Option<BeaconChainBuilder<T>>,
     beacon_chain: Option<Arc<BeaconChain<T>>>,
+    eth1_service: Option<Eth1Service>,
     exit_signals: Vec<Signal>,
     event_handler: Option<T::EventHandler>,
-    eth1_backend: Option<T::Eth1Chain>,
     libp2p_network: Option<Arc<NetworkService<T>>>,
     libp2p_network_send: Option<UnboundedSender<NetworkMessage>>,
     http_listen_addr: Option<SocketAddr>,
@@ -54,27 +67,42 @@ pub struct ClientBuilder<T: BeaconChainTypes> {
     eth_spec_instance: T::EthSpec,
 }
 
-impl<TStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
-    ClientBuilder<Witness<TStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>>
+impl<TStore, TStoreMigrator, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
+    ClientBuilder<
+        Witness<
+            TStore,
+            TStoreMigrator,
+            TSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            TEventHandler,
+        >,
+    >
 where
-    TStore: Store + 'static,
+    TStore: Store<TEthSpec> + 'static,
+    TStoreMigrator: store::Migrate<TStore, TEthSpec>,
     TSlotClock: SlotClock + Clone + 'static,
     TLmdGhost: LmdGhost<TStore, TEthSpec> + 'static,
     TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
     TEthSpec: EthSpec + 'static,
     TEventHandler: EventHandler<TEthSpec> + 'static,
 {
+    /// Instantiates a new, empty builder.
+    ///
+    /// The `eth_spec_instance` parameter is used to concretize `TEthSpec`.
     pub fn new(eth_spec_instance: TEthSpec) -> Self {
         Self {
             slot_clock: None,
             store: None,
+            store_migrator: None,
             runtime_context: None,
             chain_spec: None,
             beacon_chain_builder: None,
             beacon_chain: None,
+            eth1_service: None,
             exit_signals: vec![],
             event_handler: None,
-            eth1_backend: None,
             libp2p_network: None,
             libp2p_network_send: None,
             http_listen_addr: None,
@@ -83,22 +111,27 @@ where
         }
     }
 
+    /// Specifies the runtime context (tokio executor, logger, etc) for client services.
     pub fn runtime_context(mut self, context: RuntimeContext<TEthSpec>) -> Self {
         self.runtime_context = Some(context);
         self
     }
 
+    /// Specifies the `ChainSpec`.
     pub fn chain_spec(mut self, spec: ChainSpec) -> Self {
         self.chain_spec = Some(spec);
         self
     }
 
+    /// Initializes the `BeaconChainBuilder`. The `build_beacon_chain` method will need to be
+    /// called later in order to actually instantiate the `BeaconChain`.
     pub fn beacon_chain_builder(
         mut self,
         client_genesis: ClientGenesis,
         config: Eth1Config,
     ) -> impl Future<Item = Self, Error = String> {
         let store = self.store.clone();
+        let store_migrator = self.store_migrator.take();
         let chain_spec = self.chain_spec.clone();
         let runtime_context = self.runtime_context.clone();
         let eth_spec_instance = self.eth_spec_instance.clone();
@@ -107,20 +140,24 @@ where
             .and_then(move |()| {
                 let store = store
                     .ok_or_else(|| "beacon_chain_start_method requires a store".to_string())?;
+                let store_migrator = store_migrator.ok_or_else(|| {
+                    "beacon_chain_start_method requires a store migrator".to_string()
+                })?;
                 let context = runtime_context
                     .ok_or_else(|| "beacon_chain_start_method requires a log".to_string())?
-                    .service_context("beacon");
+                    .service_context("beacon".into());
                 let spec = chain_spec
                     .ok_or_else(|| "beacon_chain_start_method requires a chain spec".to_string())?;
 
                 let builder = BeaconChainBuilder::new(eth_spec_instance)
                     .logger(context.log.clone())
                     .store(store.clone())
+                    .store_migrator(store_migrator)
                     .custom_spec(spec.clone());
 
                 Ok((builder, spec, context))
             })
-            .and_then(|(builder, spec, context)| {
+            .and_then(move |(builder, spec, context)| {
                 let genesis_state_future: Box<dyn Future<Item = _, Error = _> + Send> =
                     match client_genesis {
                         ClientGenesis::Interop {
@@ -132,7 +169,8 @@ where
 
                             let future = result
                                 .and_then(move |genesis_state| builder.genesis_state(genesis_state))
-                                .into_future();
+                                .into_future()
+                                .map(|v| (v, None));
 
                             Box::new(future)
                         }
@@ -141,34 +179,50 @@ where
 
                             let future = result
                                 .and_then(move |genesis_state| builder.genesis_state(genesis_state))
-                                .into_future();
+                                .into_future()
+                                .map(|v| (v, None));
+
+                            Box::new(future)
+                        }
+                        ClientGenesis::SszBytes {
+                            genesis_state_bytes,
+                        } => {
+                            info!(
+                                context.log,
+                                "Starting from known genesis state";
+                            );
+
+                            let result = BeaconState::from_ssz_bytes(&genesis_state_bytes)
+                                .map_err(|e| format!("Unable to parse genesis state SSZ: {:?}", e));
+
+                            let future = result
+                                .and_then(move |genesis_state| builder.genesis_state(genesis_state))
+                                .into_future()
+                                .map(|v| (v, None));
 
                             Box::new(future)
                         }
                         ClientGenesis::DepositContract => {
-                            let genesis_service = Eth1GenesisService::new(
-                                Eth1Config {
-                                    block_cache_truncation: None,
-                                    blocks_per_log_query: 1_000,
-                                    max_log_requests_per_update: Some(1),
-                                    max_blocks_per_update: Some(1),
-                                    ..config
-                                },
-                                context.log.clone(),
+                            info!(
+                                context.log,
+                                "Waiting for eth2 genesis from eth1";
+                                "eth1_node" => &config.endpoint
                             );
+
+                            let genesis_service =
+                                Eth1GenesisService::new(config, context.log.clone());
 
                             let future = genesis_service
                                 .wait_for_genesis_state(
                                     Duration::from_millis(ETH1_GENESIS_UPDATE_INTERVAL_MILLIS),
                                     context.eth2_config().spec.clone(),
                                 )
-                                .and_then(move |genesis_state| {
-                                    builder.genesis_state(genesis_state)
-                                });
+                                .and_then(move |genesis_state| builder.genesis_state(genesis_state))
+                                .map(|v| (v, Some(genesis_service.into_core_service())));
 
                             Box::new(future)
                         }
-                        ClientGenesis::RemoteNode { server, port: _ } => {
+                        ClientGenesis::RemoteNode { server, .. } => {
                             let future = Bootstrapper::connect(server.to_string(), &context.log)
                                 .map_err(|e| {
                                     format!("Failed to initialize bootstrap client: {}", e)
@@ -181,12 +235,13 @@ where
                                         })?;
 
                                     builder.genesis_state(genesis_state)
-                                });
+                                })
+                                .map(|v| (v, None));
 
                             Box::new(future)
                         }
                         ClientGenesis::Resume => {
-                            let future = builder.resume_from_db().into_future();
+                            let future = builder.resume_from_db().into_future().map(|v| (v, None));
 
                             Box::new(future)
                         }
@@ -194,12 +249,14 @@ where
 
                 genesis_state_future
             })
-            .map(move |beacon_chain_builder| {
+            .map(move |(beacon_chain_builder, eth1_service_option)| {
+                self.eth1_service = eth1_service_option;
                 self.beacon_chain_builder = Some(beacon_chain_builder);
                 self
             })
     }
 
+    /// Immediately starts the libp2p networking stack.
     pub fn libp2p_network(mut self, config: &NetworkConfig) -> Result<Self, String> {
         let beacon_chain = self
             .beacon_chain
@@ -209,7 +266,7 @@ where
             .runtime_context
             .as_ref()
             .ok_or_else(|| "libp2p_network requires a runtime_context")?
-            .service_context("network");
+            .service_context("network".into());
 
         let (network, network_send) =
             NetworkService::new(beacon_chain, config, &context.executor, context.log)
@@ -221,34 +278,7 @@ where
         Ok(self)
     }
 
-    pub fn grpc_server(mut self, config: &RpcConfig) -> Result<Self, String> {
-        let beacon_chain = self
-            .beacon_chain
-            .clone()
-            .ok_or_else(|| "grpc_server requires a beacon chain")?;
-        let context = self
-            .runtime_context
-            .as_ref()
-            .ok_or_else(|| "grpc_server requires a runtime_context")?
-            .service_context("grpc");
-        let network_send = self
-            .libp2p_network_send
-            .clone()
-            .ok_or_else(|| "grpc_server requires a libp2p network")?;
-
-        let exit_signal = rpc::start_server(
-            config,
-            &context.executor,
-            network_send,
-            beacon_chain,
-            context.log,
-        );
-
-        self.exit_signals.push(exit_signal);
-
-        Ok(self)
-    }
-
+    /// Immediately starts the beacon node REST API http server.
     pub fn http_server(
         mut self,
         client_config: &ClientConfig,
@@ -257,20 +287,20 @@ where
         let beacon_chain = self
             .beacon_chain
             .clone()
-            .ok_or_else(|| "grpc_server requires a beacon chain")?;
+            .ok_or_else(|| "http_server requires a beacon chain")?;
         let context = self
             .runtime_context
             .as_ref()
             .ok_or_else(|| "http_server requires a runtime_context")?
-            .service_context("http");
+            .service_context("http".into());
         let network = self
             .libp2p_network
             .clone()
-            .ok_or_else(|| "grpc_server requires a libp2p network")?;
+            .ok_or_else(|| "http_server requires a libp2p network")?;
         let network_send = self
             .libp2p_network_send
             .clone()
-            .ok_or_else(|| "grpc_server requires a libp2p network sender")?;
+            .ok_or_else(|| "http_server requires a libp2p network sender")?;
 
         let network_info = rest_api::NetworkInfo {
             network_service: network.clone(),
@@ -282,7 +312,12 @@ where
             &context.executor,
             beacon_chain.clone(),
             network_info,
-            client_config.db_path().expect("unable to read datadir"),
+            client_config
+                .create_db_path()
+                .map_err(|_| "unable to read data dir")?,
+            client_config
+                .create_freezer_db_path()
+                .map_err(|_| "unable to read freezer DB dir")?,
             eth2_config.clone(),
             context.log,
         )
@@ -294,109 +329,52 @@ where
         Ok(self)
     }
 
-    pub fn peer_count_notifier(mut self) -> Result<Self, String> {
-        let context = self
-            .runtime_context
-            .as_ref()
-            .ok_or_else(|| "peer_count_notifier requires a runtime_context")?
-            .service_context("peer_notifier");
-        let log = context.log.clone();
-        let log_2 = context.log.clone();
-        let network = self
-            .libp2p_network
-            .clone()
-            .ok_or_else(|| "peer_notifier requires a libp2p network")?;
-
-        let (exit_signal, exit) = exit_future::signal();
-
-        self.exit_signals.push(exit_signal);
-
-        let interval_future = Interval::new(
-            Instant::now(),
-            Duration::from_secs(NOTIFIER_INTERVAL_SECONDS),
-        )
-        .map_err(move |e| error!(log_2, "Notifier timer failed"; "error" => format!("{:?}", e)))
-        .for_each(move |_| {
-            // NOTE: Panics if libp2p is poisoned.
-            let connected_peer_count = network.libp2p_service().lock().swarm.connected_peers();
-
-            debug!(log, "Connected peer status"; "peer_count" => connected_peer_count);
-
-            if connected_peer_count <= WARN_PEER_COUNT {
-                warn!(log, "Low peer count"; "peer_count" => connected_peer_count);
-            }
-
-            Ok(())
-        });
-
-        context
-            .executor
-            .spawn(exit.until(interval_future).map(|_| ()));
-
-        Ok(self)
-    }
-
-    pub fn slot_notifier(mut self) -> Result<Self, String> {
+    /// Immediately starts the service that periodically logs information each slot.
+    pub fn notifier(mut self) -> Result<Self, String> {
         let context = self
             .runtime_context
             .as_ref()
             .ok_or_else(|| "slot_notifier requires a runtime_context")?
-            .service_context("slot_notifier");
-        let log = context.log.clone();
-        let log_2 = log.clone();
+            .service_context("slot_notifier".into());
         let beacon_chain = self
             .beacon_chain
             .clone()
-            .ok_or_else(|| "slot_notifier requires a libp2p network")?;
-        let spec = self
-            .chain_spec
+            .ok_or_else(|| "slot_notifier requires a beacon chain")?;
+        let network = self
+            .libp2p_network
             .clone()
-            .ok_or_else(|| "slot_notifier requires a chain spec".to_string())?;
-        let slot_duration = Duration::from_millis(spec.milliseconds_per_slot);
-        let duration_to_next_slot = beacon_chain
-            .slot_clock
-            .duration_to_next_slot()
-            .ok_or_else(|| "slot_notifier unable to determine time to next slot")?;
+            .ok_or_else(|| "slot_notifier requires a libp2p network")?;
+        let milliseconds_per_slot = self
+            .chain_spec
+            .as_ref()
+            .ok_or_else(|| "slot_notifier requires a chain spec".to_string())?
+            .milliseconds_per_slot;
 
-        let (exit_signal, exit) = exit_future::signal();
+        let exit_signal = spawn_notifier(context, beacon_chain, network, milliseconds_per_slot)
+            .map_err(|e| format!("Unable to start slot notifier: {}", e))?;
 
         self.exit_signals.push(exit_signal);
-
-        let interval_future = Interval::new(Instant::now() + duration_to_next_slot, slot_duration)
-            .map_err(move |e| error!(log_2, "Slot timer failed"; "error" => format!("{:?}", e)))
-            .for_each(move |_| {
-                let best_slot = beacon_chain.head().beacon_block.slot;
-                let latest_block_root = beacon_chain.head().beacon_block_root;
-
-                if let Ok(current_slot) = beacon_chain.slot() {
-                    info!(
-                        log,
-                        "Slot start";
-                        "skip_slots" => current_slot.saturating_sub(best_slot),
-                        "best_block_root" => format!("{}", latest_block_root),
-                        "best_block_slot" => best_slot,
-                        "slot" => current_slot,
-                    )
-                } else {
-                    error!(
-                        log,
-                        "Beacon chain running whilst slot clock is unavailable."
-                    );
-                };
-
-                Ok(())
-            });
-
-        context
-            .executor
-            .spawn(exit.until(interval_future).map(|_| ()));
 
         Ok(self)
     }
 
+    /// Consumers the builder, returning a `Client` if all necessary components have been
+    /// specified.
+    ///
+    /// If type inference errors are being raised, see the comment on the definition of `Self`.
     pub fn build(
         self,
-    ) -> Client<Witness<TStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>> {
+    ) -> Client<
+        Witness<
+            TStore,
+            TStoreMigrator,
+            TSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            TEventHandler,
+        >,
+    > {
         Client {
             beacon_chain: self.beacon_chain,
             libp2p_network: self.libp2p_network,
@@ -407,10 +385,11 @@ where
     }
 }
 
-impl<TStore, TSlotClock, TEth1Backend, TEthSpec, TEventHandler>
+impl<TStore, TStoreMigrator, TSlotClock, TEth1Backend, TEthSpec, TEventHandler>
     ClientBuilder<
         Witness<
             TStore,
+            TStoreMigrator,
             TSlotClock,
             ThreadSafeReducedTree<TStore, TEthSpec>,
             TEth1Backend,
@@ -419,12 +398,14 @@ impl<TStore, TSlotClock, TEth1Backend, TEthSpec, TEventHandler>
         >,
     >
 where
-    TStore: Store + 'static,
+    TStore: Store<TEthSpec> + 'static,
+    TStoreMigrator: store::Migrate<TStore, TEthSpec>,
     TSlotClock: SlotClock + Clone + 'static,
     TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
     TEthSpec: EthSpec + 'static,
     TEventHandler: EventHandler<TEthSpec> + 'static,
 {
+    /// Consumes the internal `BeaconChainBuilder`, attaching the resulting `BeaconChain` to self.
     pub fn build_beacon_chain(mut self) -> Result<Self, String> {
         let chain = self
             .beacon_chain_builder
@@ -438,8 +419,7 @@ where
                     .clone()
                     .ok_or_else(|| "beacon_chain requires a slot clock")?,
             )
-            .eth1_backend(self.eth1_backend)
-            .empty_reduced_tree_fork_choice()
+            .reduced_tree_fork_choice()
             .map_err(|e| format!("Failed to init fork choice: {}", e))?
             .build()
             .map_err(|e| format!("Failed to build beacon chain: {}", e))?;
@@ -447,29 +427,38 @@ where
         self.beacon_chain = Some(Arc::new(chain));
         self.beacon_chain_builder = None;
         self.event_handler = None;
-        self.eth1_backend = None;
 
         Ok(self)
     }
 }
 
-impl<TStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec>
+impl<TStore, TStoreMigrator, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec>
     ClientBuilder<
-        Witness<TStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, WebSocketSender<TEthSpec>>,
+        Witness<
+            TStore,
+            TStoreMigrator,
+            TSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            WebSocketSender<TEthSpec>,
+        >,
     >
 where
-    TStore: Store + 'static,
+    TStore: Store<TEthSpec> + 'static,
+    TStoreMigrator: store::Migrate<TStore, TEthSpec>,
     TSlotClock: SlotClock + 'static,
     TLmdGhost: LmdGhost<TStore, TEthSpec> + 'static,
     TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
     TEthSpec: EthSpec + 'static,
 {
+    /// Specifies that the `BeaconChain` should publish events using the WebSocket server.
     pub fn websocket_event_handler(mut self, config: WebSocketConfig) -> Result<Self, String> {
         let context = self
             .runtime_context
             .as_ref()
             .ok_or_else(|| "websocket_event_handler requires a runtime_context")?
-            .service_context("ws");
+            .service_context("ws".into());
 
         let (sender, exit_signal, listening_addr): (
             WebSocketSender<TEthSpec>,
@@ -493,17 +482,79 @@ where
     }
 }
 
-impl<TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
-    ClientBuilder<Witness<DiskStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>>
+impl<TStoreMigrator, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
+    ClientBuilder<
+        Witness<
+            DiskStore<TEthSpec>,
+            TStoreMigrator,
+            TSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            TEventHandler,
+        >,
+    >
 where
     TSlotClock: SlotClock + 'static,
-    TLmdGhost: LmdGhost<DiskStore, TEthSpec> + 'static,
+    TStoreMigrator: store::Migrate<DiskStore<TEthSpec>, TEthSpec> + 'static,
+    TLmdGhost: LmdGhost<DiskStore<TEthSpec>, TEthSpec> + 'static,
     TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
     TEthSpec: EthSpec + 'static,
     TEventHandler: EventHandler<TEthSpec> + 'static,
 {
-    pub fn disk_store(mut self, path: &Path) -> Result<Self, String> {
-        let store = DiskStore::open(path)
+    /// Specifies that the `Client` should use a `DiskStore` database.
+    pub fn disk_store(
+        mut self,
+        hot_path: &Path,
+        cold_path: &Path,
+        slots_per_restore_point: u64,
+    ) -> Result<Self, String> {
+        let context = self
+            .runtime_context
+            .as_ref()
+            .ok_or_else(|| "disk_store requires a log".to_string())?
+            .service_context("freezer_db".into());
+        let spec = self
+            .chain_spec
+            .clone()
+            .ok_or_else(|| "disk_store requires a chain spec".to_string())?;
+
+        let store = DiskStore::open(
+            hot_path,
+            cold_path,
+            slots_per_restore_point,
+            spec,
+            context.log,
+        )
+        .map_err(|e| format!("Unable to open database: {:?}", e).to_string())?;
+        self.store = Some(Arc::new(store));
+        Ok(self)
+    }
+}
+
+impl<TStoreMigrator, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
+    ClientBuilder<
+        Witness<
+            SimpleDiskStore<TEthSpec>,
+            TStoreMigrator,
+            TSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            TEventHandler,
+        >,
+    >
+where
+    TSlotClock: SlotClock + 'static,
+    TStoreMigrator: store::Migrate<SimpleDiskStore<TEthSpec>, TEthSpec> + 'static,
+    TLmdGhost: LmdGhost<SimpleDiskStore<TEthSpec>, TEthSpec> + 'static,
+    TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
+    TEthSpec: EthSpec + 'static,
+    TEventHandler: EventHandler<TEthSpec> + 'static,
+{
+    /// Specifies that the `Client` should use a `DiskStore` database.
+    pub fn simple_disk_store(mut self, path: &Path) -> Result<Self, String> {
+        let store = SimpleDiskStore::open(path)
             .map_err(|e| format!("Unable to open database: {:?}", e).to_string())?;
         self.store = Some(Arc::new(store));
         Ok(self)
@@ -512,54 +563,118 @@ where
 
 impl<TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
     ClientBuilder<
-        Witness<MemoryStore, TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>,
-    >
-where
-    TSlotClock: SlotClock + 'static,
-    TLmdGhost: LmdGhost<MemoryStore, TEthSpec> + 'static,
-    TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
-    TEthSpec: EthSpec + 'static,
-    TEventHandler: EventHandler<TEthSpec> + 'static,
-{
-    pub fn memory_store(mut self) -> Self {
-        let store = MemoryStore::open();
-        self.store = Some(Arc::new(store));
-        self
-    }
-}
-
-impl<TStore, TSlotClock, TLmdGhost, TEthSpec, TEventHandler>
-    ClientBuilder<
         Witness<
-            TStore,
+            MemoryStore<TEthSpec>,
+            NullMigrator,
             TSlotClock,
             TLmdGhost,
-            JsonRpcEth1Backend<TEthSpec>,
+            TEth1Backend,
             TEthSpec,
             TEventHandler,
         >,
     >
 where
-    TStore: Store + 'static,
+    TSlotClock: SlotClock + 'static,
+    TLmdGhost: LmdGhost<MemoryStore<TEthSpec>, TEthSpec> + 'static,
+    TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
+    TEthSpec: EthSpec + 'static,
+    TEventHandler: EventHandler<TEthSpec> + 'static,
+{
+    /// Specifies that the `Client` should use a `MemoryStore` database.
+    ///
+    /// Also sets the `store_migrator` to the `NullMigrator`, as that's the only viable choice.
+    pub fn memory_store(mut self) -> Self {
+        let store = MemoryStore::open();
+        self.store = Some(Arc::new(store));
+        self.store_migrator = Some(NullMigrator);
+        self
+    }
+}
+
+impl<TSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
+    ClientBuilder<
+        Witness<
+            DiskStore<TEthSpec>,
+            BackgroundMigrator<TEthSpec>,
+            TSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            TEventHandler,
+        >,
+    >
+where
+    TSlotClock: SlotClock + 'static,
+    TLmdGhost: LmdGhost<DiskStore<TEthSpec>, TEthSpec> + 'static,
+    TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
+    TEthSpec: EthSpec + 'static,
+    TEventHandler: EventHandler<TEthSpec> + 'static,
+{
+    pub fn background_migrator(mut self) -> Result<Self, String> {
+        let store = self.store.clone().ok_or_else(|| {
+            "background_migrator requires the store to be initialized".to_string()
+        })?;
+        self.store_migrator = Some(BackgroundMigrator::new(store));
+        Ok(self)
+    }
+}
+
+impl<TStore, TStoreMigrator, TSlotClock, TLmdGhost, TEthSpec, TEventHandler>
+    ClientBuilder<
+        Witness<
+            TStore,
+            TStoreMigrator,
+            TSlotClock,
+            TLmdGhost,
+            CachingEth1Backend<TEthSpec, TStore>,
+            TEthSpec,
+            TEventHandler,
+        >,
+    >
+where
+    TStore: Store<TEthSpec> + 'static,
+    TStoreMigrator: store::Migrate<TStore, TEthSpec>,
     TSlotClock: SlotClock + 'static,
     TLmdGhost: LmdGhost<TStore, TEthSpec> + 'static,
     TEthSpec: EthSpec + 'static,
     TEventHandler: EventHandler<TEthSpec> + 'static,
 {
-    /// Sets the `BeaconChain` eth1 back-end to `JsonRpcEth1Backend`.
-    ///
-    /// Equivalent to calling `Self::eth1_backend` with `InteropEth1ChainBackend`.
-    pub fn json_rpc_eth1_backend(mut self, config: Eth1Config) -> Result<Self, String> {
+    /// Specifies that the `BeaconChain` should cache eth1 blocks/logs from a remote eth1 node
+    /// (e.g., Parity/Geth) and refer to that cache when collecting deposits or eth1 votes during
+    /// block production.
+    pub fn caching_eth1_backend(mut self, config: Eth1Config) -> Result<Self, String> {
         let context = self
             .runtime_context
             .as_ref()
-            .ok_or_else(|| "json_rpc_eth1_backend requires a runtime_context")?
-            .service_context("eth1_rpc");
+            .ok_or_else(|| "caching_eth1_backend requires a runtime_context")?
+            .service_context("eth1_rpc".into());
         let beacon_chain_builder = self
             .beacon_chain_builder
-            .ok_or_else(|| "json_rpc_eth1_backend requires a beacon_chain_builder")?;
+            .ok_or_else(|| "caching_eth1_backend requires a beacon_chain_builder")?;
+        let store = self
+            .store
+            .clone()
+            .ok_or_else(|| "caching_eth1_backend requires a store".to_string())?;
 
-        let backend = JsonRpcEth1Backend::new(config, context.log);
+        let backend = if let Some(eth1_service_from_genesis) = self.eth1_service {
+            eth1_service_from_genesis.update_config(config.clone())?;
+
+            // This cache is not useful because it's first (earliest) block likely the block that
+            // triggered genesis.
+            //
+            // In order to vote we need to be able to go back at least 2 * `ETH1_FOLLOW_DISTANCE`
+            // from the genesis-triggering block.  Presently the block cache does not support
+            // importing blocks with decreasing block numbers, it only accepts them in increasing
+            // order. If this turns out to be a bottleneck we can update the block cache to allow
+            // adding earlier blocks too.
+            eth1_service_from_genesis.drop_block_cache();
+
+            CachingEth1Backend::from_service(eth1_service_from_genesis, store)
+        } else {
+            CachingEth1Backend::new(config, context.log, store)
+        };
+
+        self.eth1_service = None;
 
         let exit = {
             let (tx, rx) = exit_future::signal();
@@ -579,26 +694,26 @@ where
     pub fn no_eth1_backend(mut self) -> Result<Self, String> {
         let beacon_chain_builder = self
             .beacon_chain_builder
-            .ok_or_else(|| "json_rpc_eth1_backend requires a beacon_chain_builder")?;
+            .ok_or_else(|| "caching_eth1_backend requires a beacon_chain_builder")?;
 
         self.beacon_chain_builder = Some(beacon_chain_builder.no_eth1_backend());
 
         Ok(self)
     }
 
-    /// Use an eth1 backend that can produce blocks but is not connected to the an Eth1 node.
+    /// Use an eth1 backend that can produce blocks but is not connected to an Eth1 node.
     ///
-    /// This backend will never produce deposits, so it's impossible to add validators after
-    /// genesis. The `Eth1Data` votes will all be for some deterministic junk data.
+    /// This backend will never produce deposits so it's impossible to add validators after
+    /// genesis. The `Eth1Data` votes will be deterministic junk data.
     ///
     /// ## Notes
     ///
-    /// The client is given the `JsonRpcEth1Backend` type, but the http backend is never started and the
+    /// The client is given the `CachingEth1Backend` type, but the http backend is never started and the
     /// caches are never used.
     pub fn dummy_eth1_backend(mut self) -> Result<Self, String> {
         let beacon_chain_builder = self
             .beacon_chain_builder
-            .ok_or_else(|| "json_rpc_eth1_backend requires a beacon_chain_builder")?;
+            .ok_or_else(|| "caching_eth1_backend requires a beacon_chain_builder")?;
 
         self.beacon_chain_builder = Some(beacon_chain_builder.dummy_eth1_backend()?);
 
@@ -606,17 +721,27 @@ where
     }
 }
 
-impl<TStore, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
+impl<TStore, TStoreMigrator, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>
     ClientBuilder<
-        Witness<TStore, SystemTimeSlotClock, TLmdGhost, TEth1Backend, TEthSpec, TEventHandler>,
+        Witness<
+            TStore,
+            TStoreMigrator,
+            SystemTimeSlotClock,
+            TLmdGhost,
+            TEth1Backend,
+            TEthSpec,
+            TEventHandler,
+        >,
     >
 where
-    TStore: Store + 'static,
+    TStore: Store<TEthSpec> + 'static,
+    TStoreMigrator: store::Migrate<TStore, TEthSpec>,
     TLmdGhost: LmdGhost<TStore, TEthSpec> + 'static,
     TEth1Backend: Eth1ChainBackend<TEthSpec> + 'static,
     TEthSpec: EthSpec + 'static,
     TEventHandler: EventHandler<TEthSpec> + 'static,
 {
+    /// Specifies that the slot clock should read the time from the computers system clock.
     pub fn system_time_slot_clock(mut self) -> Result<Self, String> {
         let beacon_chain_builder = self
             .beacon_chain_builder
@@ -645,43 +770,3 @@ where
         Ok(self)
     }
 }
-
-/* TODO: fix and reinstate.
-#[cfg(test)]
-mod test {
-    use super::*;
-    use sloggers::{null::NullLoggerBuilder, Build};
-    use tokio::runtime::Runtime;
-    use types::MinimalEthSpec;
-
-    fn get_logger() -> Logger {
-        let builder = NullLoggerBuilder;
-        builder.build().expect("should build logger")
-    }
-
-    fn get_runtime() -> Runtime {
-        Runtime::new().expect("should create runtime")
-    }
-
-    #[test]
-    fn builds_client() {
-        ClientBuilder::new(MinimalEthSpec)
-            .logger(get_logger())
-            .memory_store()
-            .executor(get_runtime().executor())
-            .websocket_event_handler(WebSocketConfig::default())
-            .expect("should start websocket server")
-            .dummy_eth1_backend()
-            .beacon_checkpoint(&BeaconChainStartMethod::Generated {
-                validator_count: 8,
-                genesis_time: 13371377,
-            })
-            .expect("should find beacon checkpoint")
-            .system_time_slot_clock()
-            .expect("should build slot clock")
-            .beacon_chain()
-            .expect("should start beacon chain")
-            .build();
-    }
-}
-*/

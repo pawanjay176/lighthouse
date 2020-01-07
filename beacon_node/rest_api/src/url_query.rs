@@ -1,5 +1,7 @@
+use crate::helpers::{parse_committee_index, parse_epoch, parse_signature, parse_slot};
 use crate::ApiError;
 use hyper::Request;
+use types::{CommitteeIndex, Epoch, Signature, Slot};
 
 /// Provides handy functions for parsing the query parameters of a URL.
 
@@ -11,11 +13,7 @@ impl<'a> UrlQuery<'a> {
     ///
     /// Returns `Err` if `req` does not contain any query parameters.
     pub fn from_request<T>(req: &'a Request<T>) -> Result<Self, ApiError> {
-        let query_str = req.uri().query().ok_or_else(|| {
-            ApiError::BadRequest(
-                "URL query must be valid and contain at least one key.".to_string(),
-            )
-        })?;
+        let query_str = req.uri().query().unwrap_or_else(|| "");
 
         Ok(UrlQuery(url::form_urlencoded::parse(query_str.as_bytes())))
     }
@@ -29,10 +27,19 @@ impl<'a> UrlQuery<'a> {
             .map(|(key, value)| (key.into_owned(), value.into_owned()))
             .ok_or_else(|| {
                 ApiError::BadRequest(format!(
-                    "URL query must contain at least one of the following keys: {:?}",
+                    "URL query must be valid and contain at least one of the following keys: {:?}",
                     keys
                 ))
             })
+    }
+
+    /// Returns the first `(key, value)` pair found where the `key` is in `keys`, if any.
+    ///
+    /// Returns `None` if no match is found.
+    pub fn first_of_opt(mut self, keys: &[&str]) -> Option<(String, String)> {
+        self.0
+            .find(|(key, _value)| keys.contains(&&**key))
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
     }
 
     /// Returns the value for `key`, if and only if `key` is the only key present in the query
@@ -76,6 +83,30 @@ impl<'a> UrlQuery<'a> {
             })
             .collect();
         Ok(queries)
+    }
+
+    /// Returns the value of the first occurrence of the `epoch` key.
+    pub fn epoch(self) -> Result<Epoch, ApiError> {
+        self.first_of(&["epoch"])
+            .and_then(|(_key, value)| parse_epoch(&value))
+    }
+
+    /// Returns the value of the first occurrence of the `slot` key.
+    pub fn slot(self) -> Result<Slot, ApiError> {
+        self.first_of(&["slot"])
+            .and_then(|(_key, value)| parse_slot(&value))
+    }
+
+    /// Returns the value of the first occurrence of the `committee_index` key.
+    pub fn committee_index(self) -> Result<CommitteeIndex, ApiError> {
+        self.first_of(&["committee_index"])
+            .and_then(|(_key, value)| parse_committee_index(&value))
+    }
+
+    /// Returns the value of the first occurrence of the `randao_reveal` key.
+    pub fn randao_reveal(self) -> Result<Signature, ApiError> {
+        self.first_of(&["randao_reveal"])
+            .and_then(|(_key, value)| parse_signature(&value))
     }
 }
 

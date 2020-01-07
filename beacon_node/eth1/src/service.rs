@@ -1,9 +1,8 @@
+use crate::metrics;
 use crate::{
     block_cache::{BlockCache, Error as BlockCacheError, Eth1Block},
     deposit_cache::Error as DepositCacheError,
-    http::{
-        get_block, get_block_number, get_deposit_count, get_deposit_logs_in_range, get_deposit_root,
-    },
+    http::{get_block, get_block_number, get_deposit_logs_in_range},
     inner::{DepositUpdater, Inner},
     DepositLog,
 };
@@ -26,16 +25,13 @@ const STANDARD_TIMEOUT_MILLIS: u64 = 15_000;
 const BLOCK_NUMBER_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
 /// Timeout when doing an eth_getBlockByNumber call.
 const GET_BLOCK_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
-/// Timeout when doing an eth_call to read the deposit contract root.
-const GET_DEPOSIT_ROOT_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
-/// Timeout when doing an eth_call to read the deposit contract deposit count.
-const GET_DEPOSIT_COUNT_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
 /// Timeout when doing an eth_getLogs to read the deposit contract logs.
-const GET_DEPOSIT_LOG_TIMEOUT_MILLIS: u64 = 15_000;
+const GET_DEPOSIT_LOG_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
-    /// The remote node is less synced that we expect.
+    /// The remote node is less synced that we expect, it is not useful until has done more
+    /// syncing.
     RemoteNotSynced {
         next_required_block: u64,
         remote_highest_block: u64,
@@ -56,14 +52,10 @@ pub enum Error {
     /// There was an inconsistency when adding a deposit to the cache.
     FailedToInsertDeposit(DepositCacheError),
     /// A log downloaded from the eth1 contract was not well formed.
-    IncompleteLogResponse { expected: usize, response: usize },
-    /// A log downloaded from the eth1 contract was not well formed.
     FailedToParseDepositLog {
         block_range: Range<u64>,
         error: String,
     },
-    /// The eth1 http json-rpc node returned an error.
-    Eth1RpcError(String),
     /// There was an unexpected internal error.
     Internal(String),
 }
@@ -99,6 +91,8 @@ pub struct Config {
     /// Defines the lowest block number that should be downloaded and added to the `BlockCache`.
     pub lowest_cached_block_number: u64,
     /// Defines how far behind the Eth1 node's head we should follow.
+    ///
+    /// Note: this should be less than or equal to the specification's `ETH1_FOLLOW_DISTANCE`.
     pub follow_distance: u64,
     /// Defines the number of blocks that should be retained each time the `BlockCache` calls truncate on
     /// itself.
@@ -118,11 +112,11 @@ impl Default for Config {
         Self {
             endpoint: "http://localhost:8545".into(),
             deposit_contract_address: "0x0000000000000000000000000000000000000000".into(),
-            deposit_contract_deploy_block: 0,
-            lowest_cached_block_number: 0,
+            deposit_contract_deploy_block: 1,
+            lowest_cached_block_number: 1,
             follow_distance: 128,
             block_cache_truncation: Some(4_096),
-            auto_update_interval_millis: 500,
+            auto_update_interval_millis: 7_000,
             blocks_per_log_query: 1_000,
             max_log_requests_per_update: None,
             max_blocks_per_update: None,
@@ -147,6 +141,9 @@ impl Service {
     pub fn new(config: Config, log: Logger) -> Self {
         Self {
             inner: Arc::new(Inner {
+                deposit_cache: RwLock::new(DepositUpdater::new(
+                    config.deposit_contract_deploy_block,
+                )),
                 config: RwLock::new(config),
                 ..Inner::default()
             }),
@@ -164,6 +161,26 @@ impl Service {
         &self.inner.deposit_cache
     }
 
+    /// Drop the block cache, replacing it with an empty one.
+    pub fn drop_block_cache(&self) {
+        *(self.inner.block_cache.write()) = BlockCache::default();
+    }
+
+    /// Returns the timestamp of the earliest block in the cache (if any).
+    pub fn earliest_block_timestamp(&self) -> Option<u64> {
+        self.inner.block_cache.read().earliest_block_timestamp()
+    }
+
+    /// Returns the timestamp of the latest block in the cache (if any).
+    pub fn latest_block_timestamp(&self) -> Option<u64> {
+        self.inner.block_cache.read().latest_block_timestamp()
+    }
+
+    /// Returns the lowest block number stored.
+    pub fn lowest_block_number(&self) -> Option<u64> {
+        self.inner.block_cache.read().lowest_block_number()
+    }
+
     /// Returns the number of currently cached blocks.
     pub fn block_cache_len(&self) -> usize {
         self.blocks().read().len()
@@ -177,6 +194,27 @@ impl Service {
     /// Read the service's configuration.
     pub fn config(&self) -> RwLockReadGuard<Config> {
         self.inner.config.read()
+    }
+
+    /// Updates the configuration in `self to be `new_config`.
+    ///
+    /// Will truncate the block cache if the new configure specifies truncation.
+    pub fn update_config(&self, new_config: Config) -> Result<(), String> {
+        let mut old_config = self.inner.config.write();
+
+        if new_config.deposit_contract_deploy_block != old_config.deposit_contract_deploy_block {
+            // This may be possible, I just haven't looked into the details to ensure it's safe.
+            Err("Updating deposit_contract_deploy_block is not supported".to_string())
+        } else {
+            *old_config = new_config;
+
+            // Prevents a locking condition when calling prune_blocks.
+            drop(old_config);
+
+            self.inner.prune_blocks();
+
+            Ok(())
+        }
     }
 
     /// Set the lowest block that the block cache will store.
@@ -200,6 +238,8 @@ impl Service {
     {
         let log_a = self.log.clone();
         let log_b = self.log.clone();
+        let inner_1 = self.inner.clone();
+        let inner_2 = self.inner.clone();
 
         let deposit_future = self
             .update_deposit_cache()
@@ -209,7 +249,9 @@ impl Service {
                     Ok(DepositCacheUpdateOutcome::Success { logs_imported }) => trace!(
                         log_a,
                         "Updated eth1 deposit cache";
+                        "cached_deposits" => inner_1.deposit_cache.read().cache.len(),
                         "logs_imported" => logs_imported,
+                        "last_processed_eth1_block" => inner_1.deposit_cache.read().last_processed_block,
                     ),
                     Err(e) => error!(
                         log_a,
@@ -232,6 +274,7 @@ impl Service {
                     }) => trace!(
                         log_b,
                         "Updated eth1 block cache";
+                        "cached_blocks" => inner_2.block_cache.read().len(),
                         "blocks_imported" => blocks_imported,
                         "head_block" => head_block_number,
                     ),
@@ -262,8 +305,7 @@ impl Service {
         let log = self.log.clone();
         let update_interval = Duration::from_millis(self.config().auto_update_interval_millis);
 
-        loop_fn((), move |()| {
-            let exit = exit.clone();
+        let loop_future = loop_fn((), move |()| {
             let service = service.clone();
             let log_a = log.clone();
             let log_b = log.clone();
@@ -300,16 +342,11 @@ impl Service {
                         );
                     }
                     // Do not break the loop if there is an timer failure.
-                    Ok(())
+                    Ok(Loop::Continue(()))
                 })
-                .map(move |_| {
-                    if exit.is_live() {
-                        Loop::Continue(())
-                    } else {
-                        Loop::Break(())
-                    }
-                })
-        })
+        });
+
+        exit.until(loop_future).map(|_: Option<()>| ())
     }
 
     /// Contacts the remote eth1 node and attempts to import deposit logs up to the configured
@@ -333,7 +370,7 @@ impl Service {
         let max_log_requests_per_update = self
             .config()
             .max_log_requests_per_update
-            .unwrap_or_else(|| usize::max_value());
+            .unwrap_or_else(usize::max_value);
 
         let next_required_block = self
             .deposits()
@@ -351,7 +388,6 @@ impl Service {
             range
                 .map(|range| {
                     range
-                        .into_iter()
                         .collect::<Vec<u64>>()
                         .chunks(blocks_per_log_query)
                         .take(max_log_requests_per_update)
@@ -377,7 +413,7 @@ impl Service {
                                 chunk,
                                 Duration::from_millis(GET_DEPOSIT_LOG_TIMEOUT_MILLIS),
                             )
-                            .map_err(|e| Error::GetDepositLogsFailed(e))
+                            .map_err(Error::GetDepositLogsFailed)
                             .map(|logs| (chunk_1, logs))
                             .map(|logs| (logs, chunks)),
                         )
@@ -386,33 +422,49 @@ impl Service {
                 },
             )
             .fold(0, move |mut sum, (block_range, log_chunk)| {
-                // It's important that blocks are log are imported atomically per-block, unless an
-                // error occurs. There is no guarantee for consistency if an error is returned.
-                //
-                // That is, if there are any logs from block `n`, then there are _all_ logs
-                // from block `n` and all prior blocks.
-                //
-                // This is achieved by taking an exclusive write-lock on the cache whilst adding
-                // logs one-by-one.
                 let mut cache = service_2.deposits().write();
 
-                for raw_log in log_chunk {
-                    let deposit_log = DepositLog::from_log(&raw_log).map_err(|error| {
-                        Error::FailedToParseDepositLog {
-                            block_range: block_range.clone(),
-                            error,
-                        }
-                    })?;
+                log_chunk
+                    .into_iter()
+                    .map(|raw_log| {
+                        DepositLog::from_log(&raw_log).map_err(|error| {
+                            Error::FailedToParseDepositLog {
+                                block_range: block_range.clone(),
+                                error,
+                            }
+                        })
+                    })
+                    // Return early if any of the logs cannot be parsed.
+                    //
+                    // This costs an additional `collect`, however it enforces that no logs are
+                    // imported if any one of them cannot be parsed.
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .map(|deposit_log| {
+                        cache
+                            .cache
+                            .insert_log(deposit_log)
+                            .map_err(Error::FailedToInsertDeposit)?;
 
-                    cache
-                        .cache
-                        .insert_log(deposit_log)
-                        .map_err(|e| Error::FailedToInsertDeposit(e))?;
+                        sum += 1;
 
-                    sum += 1;
-                }
+                        Ok(())
+                    })
+                    // Returns if a deposit is unable to be added to the cache.
+                    //
+                    // If this error occurs, the cache will no longer be guaranteed to hold either
+                    // none or all of the logs for each block (i.e., they may exist _some_ logs for
+                    // a block, but not _all_ logs for that block). This scenario can cause the
+                    // node to choose an invalid genesis state or propose an invalid block.
+                    .collect::<Result<_, _>>()?;
 
                 cache.last_processed_block = Some(block_range.end.saturating_sub(1));
+
+                metrics::set_gauge(&metrics::DEPOSIT_CACHE_LEN, cache.cache.len() as i64);
+                metrics::set_gauge(
+                    &metrics::HIGHEST_PROCESSED_DEPOSIT_BLOCK,
+                    cache.last_processed_block.unwrap_or_else(|| 0) as i64,
+                );
 
                 Ok(sum)
             })
@@ -437,12 +489,13 @@ impl Service {
         let cache_3 = self.inner.clone();
         let cache_4 = self.inner.clone();
         let cache_5 = self.inner.clone();
+        let cache_6 = self.inner.clone();
 
         let block_cache_truncation = self.config().block_cache_truncation;
         let max_blocks_per_update = self
             .config()
             .max_blocks_per_update
-            .unwrap_or_else(|| usize::max_value());
+            .unwrap_or_else(usize::max_value);
 
         let next_required_block = cache_1
             .block_cache
@@ -464,21 +517,23 @@ impl Service {
             range
                 .map(|range| {
                     if range.start() > range.end() {
+                        // Note: this check is not strictly necessary, however it remains to safe
+                        // guard against any regression which may cause an underflow in a following
+                        // subtraction operation.
                         Err(Error::Internal("Range was not increasing".into()))
                     } else {
                         let range_size = range.end() - range.start();
                         let max_size = block_cache_truncation
                             .map(|n| n as u64)
-                            .unwrap_or_else(|| u64::max_value());
-
+                            .unwrap_or_else(u64::max_value);
                         if range_size > max_size {
+                            // If the range of required blocks is larger than `max_size`, drop all
+                            // existing blocks and download `max_size` count of blocks.
                             let first_block = range.end() - max_size;
                             (*cache_5.block_cache.write()) = BlockCache::default();
-                            Ok((first_block..=*range.end())
-                                .into_iter()
-                                .collect::<Vec<u64>>())
+                            Ok((first_block..=*range.end()).collect::<Vec<u64>>())
                         } else {
-                            Ok(range.into_iter().collect::<Vec<u64>>())
+                            Ok(range.collect::<Vec<u64>>())
                         }
                     }
                 })
@@ -486,14 +541,22 @@ impl Service {
         })
         // Download the range of blocks and sequentially import them into the cache.
         .and_then(move |required_block_numbers| {
+            // Last processed block in deposit cache
+            let latest_in_cache = cache_6
+                .deposit_cache
+                .read()
+                .last_processed_block
+                .unwrap_or(0);
+
             let required_block_numbers = required_block_numbers
                 .into_iter()
-                .take(max_blocks_per_update);
-
+                .filter(|x| *x <= latest_in_cache)
+                .take(max_blocks_per_update)
+                .collect::<Vec<_>>();
             // Produce a stream from the list of required block numbers and return a future that
             // consumes the it.
             stream::unfold(
-                required_block_numbers,
+                required_block_numbers.into_iter(),
                 move |mut block_numbers| match block_numbers.next() {
                     Some(block_number) => Some(
                         download_eth1_block(cache_2.clone(), block_number)
@@ -507,7 +570,20 @@ impl Service {
                     .block_cache
                     .write()
                     .insert_root_or_child(eth1_block)
-                    .map_err(|e| Error::FailedToInsertEth1Block(e))?;
+                    .map_err(Error::FailedToInsertEth1Block)?;
+
+                metrics::set_gauge(
+                    &metrics::BLOCK_CACHE_LEN,
+                    cache_3.block_cache.read().len() as i64,
+                );
+                metrics::set_gauge(
+                    &metrics::LATEST_CACHED_BLOCK_TIMESTAMP,
+                    cache_3
+                        .block_cache
+                        .read()
+                        .latest_block_timestamp()
+                        .unwrap_or_else(|| 0) as i64,
+                );
 
                 Ok(sum + 1)
             })
@@ -515,6 +591,11 @@ impl Service {
         .and_then(move |blocks_imported| {
             // Prune the block cache, preventing it from growing too large.
             cache_4.prune_blocks();
+
+            metrics::set_gauge(
+                &metrics::BLOCK_CACHE_LEN,
+                cache_4.block_cache.read().len() as i64,
+            );
 
             Ok(BlockCacheUpdateOutcome::Success {
                 blocks_imported,
@@ -532,18 +613,22 @@ fn get_new_block_numbers<'a>(
     follow_distance: u64,
 ) -> impl Future<Item = Option<RangeInclusive<u64>>, Error = Error> + 'a {
     get_block_number(endpoint, Duration::from_millis(BLOCK_NUMBER_TIMEOUT_MILLIS))
-        .map_err(|e| Error::GetBlockNumberFailed(e))
+        .map_err(Error::GetBlockNumberFailed)
         .and_then(move |remote_highest_block| {
             let remote_follow_block = remote_highest_block.saturating_sub(follow_distance);
 
             if next_required_block <= remote_follow_block {
-                // Plus one to make the range inclusive.
                 Ok(Some(next_required_block..=remote_follow_block))
             } else if next_required_block > remote_highest_block + 1 {
+                // If this is the case, the node must have gone "backwards" in terms of it's sync
+                // (i.e., it's head block is lower than it was before).
+                //
+                // We assume that the `follow_distance` should be sufficient to ensure this never
+                // happens, otherwise it is an error.
                 Err(Error::RemoteNotSynced {
                     next_required_block,
                     remote_highest_block,
-                    follow_distance: follow_distance,
+                    follow_distance,
                 })
             } else {
                 // Return an empty range.
@@ -560,31 +645,24 @@ fn download_eth1_block<'a>(
     cache: Arc<Inner>,
     block_number: u64,
 ) -> impl Future<Item = Eth1Block, Error = Error> + 'a {
+    let deposit_root = cache
+        .deposit_cache
+        .read()
+        .cache
+        .get_deposit_root_from_cache(block_number);
+    let deposit_count = cache
+        .deposit_cache
+        .read()
+        .cache
+        .get_deposit_count_from_cache(block_number);
     // Performs a `get_blockByNumber` call to an eth1 node.
     get_block(
         &cache.config.read().endpoint,
         block_number,
         Duration::from_millis(GET_BLOCK_TIMEOUT_MILLIS),
     )
-    .map_err(|e| Error::BlockDownloadFailed(e))
-    .join3(
-        // Perform 2x `eth_call` via an eth1 node to read the deposit contract root and count.
-        get_deposit_root(
-            &cache.config.read().endpoint,
-            &cache.config.read().deposit_contract_address,
-            block_number,
-            Duration::from_millis(GET_DEPOSIT_ROOT_TIMEOUT_MILLIS),
-        )
-        .map_err(|e| Error::GetDepositRootFailed(e)),
-        get_deposit_count(
-            &cache.config.read().endpoint,
-            &cache.config.read().deposit_contract_address,
-            block_number,
-            Duration::from_millis(GET_DEPOSIT_COUNT_TIMEOUT_MILLIS),
-        )
-        .map_err(|e| Error::GetDepositCountFailed(e)),
-    )
-    .map(|(http_block, deposit_root, deposit_count)| Eth1Block {
+    .map_err(Error::BlockDownloadFailed)
+    .map(move |http_block| Eth1Block {
         hash: http_block.hash,
         number: http_block.number,
         timestamp: http_block.timestamp,
@@ -600,6 +678,8 @@ mod tests {
 
     #[test]
     fn serde_serialize() {
-        let _ = toml::to_string(&Config::default()).expect("Should serde encode default config");
+        let serialized =
+            toml::to_string(&Config::default()).expect("Should serde encode default config");
+        toml::from_str::<Config>(&serialized).expect("Should serde decode default config");
     }
 }

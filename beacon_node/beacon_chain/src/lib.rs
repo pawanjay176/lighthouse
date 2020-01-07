@@ -5,14 +5,16 @@ extern crate lazy_static;
 mod beacon_chain;
 pub mod builder;
 mod checkpoint;
+mod checkpoint_cache;
 mod errors;
 pub mod eth1_chain;
 pub mod events;
 mod fork_choice;
-mod iter;
+mod head_tracker;
 mod metrics;
 mod persisted_beacon_chain;
 pub mod test_utils;
+mod timeout_rw_lock;
 
 pub use self::beacon_chain::{
     AttestationProcessingOutcome, BeaconChain, BeaconChainTypes, BlockProcessingOutcome,
@@ -28,7 +30,7 @@ pub use parking_lot;
 pub use slot_clock;
 pub use state_processing::per_block_processing::errors::{
     AttestationValidationError, AttesterSlashingValidationError, DepositValidationError,
-    ExitValidationError, ProposerSlashingValidationError, TransferValidationError,
+    ExitValidationError, ProposerSlashingValidationError,
 };
 pub use store;
 pub use types;

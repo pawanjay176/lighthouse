@@ -11,14 +11,8 @@
 //! There is no ABI parsing here, all function signatures and topics are hard-coded as constants.
 
 use futures::{Future, Stream};
-use libflate::gzip::Decoder;
-use reqwest::{
-    header::{ACCEPT_ENCODING, CONTENT_TYPE},
-    r#async::ClientBuilder,
-    StatusCode,
-};
+use reqwest::{header::CONTENT_TYPE, r#async::ClientBuilder, StatusCode};
 use serde_json::{json, Value};
-use std::io::prelude::*;
 use std::ops::Range;
 use std::time::Duration;
 use types::Hash256;
@@ -27,7 +21,7 @@ use types::Hash256;
 pub const DEPOSIT_EVENT_TOPIC: &str =
     "0x649bbc62d0e31342afea4e5cd82d4049e7e1ee912fc0889aa790803be39038c5";
 /// `keccak("get_deposit_root()")[0..4]`
-pub const DEPOSIT_ROOT_FN_SIGNATURE: &str = "0x863a311b";
+pub const DEPOSIT_ROOT_FN_SIGNATURE: &str = "0xc5f2892f";
 /// `keccak("get_deposit_count()")[0..4]`
 pub const DEPOSIT_COUNT_FN_SIGNATURE: &str = "0x621fd130";
 
@@ -109,7 +103,7 @@ pub fn get_block(
                     .ok_or_else(|| "Block number was not string")?,
             )?;
 
-            if number <= usize_max_size() {
+            if number <= usize::max_value() as u64 {
                 Ok(Block {
                     hash,
                     timestamp,
@@ -120,11 +114,6 @@ pub fn get_block(
             }
         })
         .map_err(|e| format!("Failed to get block number: {}", e))
-}
-
-/// The maximum allowable size of a usize.
-fn usize_max_size() -> u64 {
-    1 << (std::mem::size_of::<usize>() * 8) - 1
 }
 
 /// Returns the value of the `get_deposit_count()` call at the given `address` for the given
@@ -146,19 +135,21 @@ pub fn get_deposit_count(
         block_number,
         timeout,
     )
-    .and_then(|result| result.ok_or_else(|| "No response to deposit count".to_string()))
-    .and_then(|bytes| {
-        if bytes.is_empty() {
-            Ok(None)
-        } else if bytes.len() == DEPOSIT_COUNT_RESPONSE_BYTES {
-            let mut array = [0; 8];
-            array.copy_from_slice(&bytes[32 + 32..32 + 32 + 8]);
-            Ok(Some(u64::from_le_bytes(array)))
-        } else {
-            Err(format!(
-                "Deposit count response was not {} bytes: {:?}",
-                DEPOSIT_COUNT_RESPONSE_BYTES, bytes
-            ))
+    .and_then(|result| match result {
+        None => Err(format!("Deposit root response was none")),
+        Some(bytes) => {
+            if bytes.is_empty() {
+                Ok(None)
+            } else if bytes.len() == DEPOSIT_COUNT_RESPONSE_BYTES {
+                let mut array = [0; 8];
+                array.copy_from_slice(&bytes[32 + 32..32 + 32 + 8]);
+                Ok(Some(u64::from_le_bytes(array)))
+            } else {
+                Err(format!(
+                    "Deposit count response was not {} bytes: {:?}",
+                    DEPOSIT_COUNT_RESPONSE_BYTES, bytes
+                ))
+            }
         }
     })
 }
@@ -181,17 +172,19 @@ pub fn get_deposit_root(
         block_number,
         timeout,
     )
-    .and_then(|result| result.ok_or_else(|| "No response to deposit root".to_string()))
-    .and_then(|bytes| {
-        if bytes.is_empty() {
-            Ok(None)
-        } else if bytes.len() == DEPOSIT_ROOT_BYTES {
-            Ok(Some(Hash256::from_slice(&bytes)))
-        } else {
-            Err(format!(
-                "Deposit root response was not {} bytes: {:?}",
-                DEPOSIT_ROOT_BYTES, bytes
-            ))
+    .and_then(|result| match result {
+        None => Err(format!("Deposit root response was none")),
+        Some(bytes) => {
+            if bytes.is_empty() {
+                Ok(None)
+            } else if bytes.len() == DEPOSIT_ROOT_BYTES {
+                Ok(Some(Hash256::from_slice(&bytes)))
+            } else {
+                Err(format!(
+                    "Deposit root response was not {} bytes: {:?}",
+                    DEPOSIT_ROOT_BYTES, bytes
+                ))
+            }
         }
     })
 }
@@ -306,13 +299,16 @@ pub fn send_rpc_request(
     })
     .to_string();
 
+    // Note: it is not ideal to create a new client for each request.
+    //
+    // A better solution would be to create some struct that contains a built client and pass it
+    // around (similar to the `web3` crate's `Transport` structs).
     ClientBuilder::new()
         .timeout(timeout)
         .build()
         .expect("The builder should always build a client")
         .post(endpoint)
         .header(CONTENT_TYPE, "application/json")
-        .header(ACCEPT_ENCODING, "gzip")
         .body(body)
         .send()
         .map_err(|e| format!("Request failed: {:?}", e))
@@ -348,16 +344,6 @@ pub fn send_rpc_request(
                 .and_then(move |bytes| match encoding.as_str() {
                     "application/json" => Ok(bytes),
                     "application/json; charset=utf-8" => Ok(bytes),
-                    "application/x-gzip" => {
-                        let mut decoder = Decoder::new(&bytes[..])
-                            .map_err(|e| format!("Failed to create gzip decoder: {}", e))?;
-                        let mut decompressed = vec![];
-                        decoder
-                            .read_to_end(&mut decompressed)
-                            .map_err(|e| format!("Failed to decompress gzip data: {}", e))?;
-
-                        Ok(decompressed)
-                    }
                     other => Err(format!("Unsupported encoding: {}", other)),
                 })
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -367,12 +353,18 @@ pub fn send_rpc_request(
 
 /// Accepts an entire HTTP body (as a string) and returns the `result` field, as a serde `Value`.
 fn response_result(response: &str) -> Result<Option<Value>, String> {
-    Ok(serde_json::from_str::<Value>(&response)
-        .map_err(|e| format!("Failed to parse response: {:?}", e))?
-        .get("result")
-        .cloned()
-        .map(|v| Some(v))
-        .unwrap_or_else(|| None))
+    let json = serde_json::from_str::<Value>(&response)
+        .map_err(|e| format!("Failed to parse response: {:?}", e))?;
+
+    if let Some(error) = json.get("error") {
+        Err(format!("Eth1 node returned error: {}", error))
+    } else {
+        Ok(json
+            .get("result")
+            .cloned()
+            .map(Some)
+            .unwrap_or_else(|| None))
+    }
 }
 
 /// Parses a `0x`-prefixed, **big-endian** hex string as a u64.
@@ -382,20 +374,21 @@ fn response_result(response: &str) -> Result<Option<Value>, String> {
 ///
 /// E.g., `0x01 == 1`
 fn hex_to_u64_be(hex: &str) -> Result<u64, String> {
-    if hex.starts_with("0x") {
-        u64::from_str_radix(&hex[2..], 16)
-            .map_err(|e| format!("Failed to parse hex as u64: {:?}", e))
-    } else {
-        Err("Hex string did not start with `0x`".to_string())
-    }
+    u64::from_str_radix(strip_prefix(hex)?, 16)
+        .map_err(|e| format!("Failed to parse hex as u64: {:?}", e))
 }
 
 /// Parses a `0x`-prefixed, big-endian hex string as bytes.
 ///
 /// E.g., `0x0102 == vec![1, 2]`
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
+    hex::decode(strip_prefix(hex)?).map_err(|e| format!("Failed to parse hex as bytes: {:?}", e))
+}
+
+/// Removes the `0x` prefix from some bytes. Returns an error if the prefix is not present.
+fn strip_prefix(hex: &str) -> Result<&str, String> {
     if hex.starts_with("0x") {
-        hex::decode(&hex[2..]).map_err(|e| format!("Failed to parse hex as bytes: {:?}", e))
+        Ok(&hex[2..])
     } else {
         Err("Hex string did not start with `0x`".to_string())
     }

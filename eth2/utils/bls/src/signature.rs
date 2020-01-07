@@ -2,7 +2,7 @@ use super::{PublicKey, SecretKey, BLS_SIG_BYTE_SIZE};
 use milagro_bls::Signature as RawSignature;
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
-use serde_hex::{encode as hex_encode, HexVisitor};
+use serde_hex::{encode as hex_encode, PrefixedHexVisitor};
 use ssz::{ssz_encode, Decode, DecodeError, Encode};
 
 /// A single BLS signature.
@@ -108,7 +108,7 @@ impl Signature {
 
 impl_ssz!(Signature, BLS_SIG_BYTE_SIZE, "Signature");
 
-impl_tree_hash!(Signature, U96);
+impl_tree_hash!(Signature, BLS_SIG_BYTE_SIZE);
 
 impl Serialize for Signature {
     /// Serde serialization is compliant the Ethereum YAML test format.
@@ -126,7 +126,7 @@ impl<'de> Deserialize<'de> for Signature {
     where
         D: Deserializer<'de>,
     {
-        let bytes = deserializer.deserialize_str(HexVisitor)?;
+        let bytes = deserializer.deserialize_str(PrefixedHexVisitor)?;
         let signature = Self::from_ssz_bytes(&bytes[..])
             .map_err(|e| serde::de::Error::custom(format!("invalid ssz ({:?})", e)))?;
         Ok(signature)

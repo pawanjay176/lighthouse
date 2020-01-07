@@ -4,7 +4,10 @@
 //!
 //! This implementation is incomplete and has known bugs. Do not use in production.
 use super::{LmdGhost, Result as SuperResult};
+use itertools::Itertools;
 use parking_lot::RwLock;
+use ssz::{Decode, Encode};
+use ssz_derive::{Decode, Encode};
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -20,15 +23,24 @@ pub enum Error {
     MissingBlock(Hash256),
     MissingState(Hash256),
     MissingChild(Hash256),
+    MissingSuccessor(Hash256, Hash256),
     NotInTree(Hash256),
     NoCommonAncestor((Hash256, Hash256)),
     StoreError(StoreError),
     ValidatorWeightUnknown(usize),
+    SszDecodingError(ssz::DecodeError),
+    InvalidReducedTreeSsz(String),
 }
 
 impl From<StoreError> for Error {
     fn from(e: StoreError) -> Error {
         Error::StoreError(e)
+    }
+}
+
+impl From<ssz::DecodeError> for Error {
+    fn from(e: ssz::DecodeError) -> Error {
+        Error::SszDecodingError(e)
     }
 }
 
@@ -43,9 +55,16 @@ impl<T, E> fmt::Debug for ThreadSafeReducedTree<T, E> {
     }
 }
 
+impl<T, E> PartialEq for ThreadSafeReducedTree<T, E> {
+    /// This implementation ignores the `store`.
+    fn eq(&self, other: &Self) -> bool {
+        *self.core.read() == *other.core.read()
+    }
+}
+
 impl<T, E> LmdGhost<T, E> for ThreadSafeReducedTree<T, E>
 where
-    T: Store,
+    T: Store<E>,
     E: EthSpec,
 {
     fn new(store: Arc<T>, genesis_block: &BeaconBlock<E>, genesis_root: Hash256) -> Self {
@@ -104,11 +123,73 @@ where
         self.core.read().latest_message(validator_index)
     }
 
-    fn verify_integrity(&self) -> std::result::Result<(), String> {
+    fn verify_integrity(&self) -> SuperResult<()> {
         self.core.read().verify_integrity()
+    }
+
+    /// Consume the `ReducedTree` object and return its ssz encoded bytes representation.
+    fn as_bytes(&self) -> Vec<u8> {
+        self.core.read().as_bytes()
+    }
+
+    /// Create a new `ThreadSafeReducedTree` instance from a `store` and the
+    /// encoded ssz bytes representation.
+    ///
+    /// Returns an error if ssz bytes are not a valid `ReducedTreeSsz` object.
+    fn from_bytes(bytes: &[u8], store: Arc<T>) -> SuperResult<Self> {
+        Ok(ThreadSafeReducedTree {
+            core: RwLock::new(
+                ReducedTree::from_bytes(bytes, store)
+                    .map_err(|e| format!("Cannot decode ssz bytes {:?}", e))?,
+            ),
+        })
     }
 }
 
+/// Intermediate representation of a `ReducedTree` `LmdGhost` fork choice.
+#[derive(Debug, PartialEq, Encode, Decode)]
+struct ReducedTreeSsz {
+    pub node_hashes: Vec<Hash256>,
+    pub nodes: Vec<Node>,
+    pub latest_votes: Vec<Option<Vote>>,
+    pub root_hash: Hash256,
+    pub root_slot: Slot,
+}
+
+impl ReducedTreeSsz {
+    pub fn from_reduced_tree<T, E>(tree: &ReducedTree<T, E>) -> Self {
+        let (node_hashes, nodes): (Vec<_>, Vec<_>) = tree.nodes.clone().into_iter().unzip();
+        ReducedTreeSsz {
+            node_hashes,
+            nodes,
+            latest_votes: tree.latest_votes.0.clone(),
+            root_hash: tree.root.0,
+            root_slot: tree.root.1,
+        }
+    }
+
+    pub fn to_reduced_tree<T, E>(self, store: Arc<T>) -> Result<ReducedTree<T, E>> {
+        if self.node_hashes.len() != self.nodes.len() {
+            Error::InvalidReducedTreeSsz("node_hashes and nodes should have equal length".into());
+        }
+        let nodes: HashMap<_, _> = self
+            .node_hashes
+            .into_iter()
+            .zip(self.nodes.into_iter())
+            .collect();
+        let latest_votes = ElasticList(self.latest_votes);
+        let root = (self.root_hash, self.root_slot);
+        Ok(ReducedTree {
+            store,
+            nodes,
+            latest_votes,
+            root,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+#[derive(Clone)]
 struct ReducedTree<T, E> {
     store: Arc<T>,
     /// Stores all nodes of the tree, keyed by the block hash contained in the node.
@@ -126,9 +207,18 @@ impl<T, E> fmt::Debug for ReducedTree<T, E> {
     }
 }
 
+impl<T, E> PartialEq for ReducedTree<T, E> {
+    /// This implementation ignores the `store` field.
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes
+            && self.latest_votes == other.latest_votes
+            && self.root == other.root
+    }
+}
+
 impl<T, E> ReducedTree<T, E>
 where
-    T: Store,
+    T: Store<E>,
     E: EthSpec,
 {
     pub fn new(store: Arc<T>, genesis_block: &BeaconBlock<E>, genesis_root: Hash256) -> Self {
@@ -177,8 +267,8 @@ where
         if current_hash != subtree_hash {
             let children = self.get_node(current_hash)?.children.clone();
 
-            for child_hash in children {
-                self.retain_subtree(child_hash, subtree_hash)?;
+            for child in children {
+                self.retain_subtree(child.hash, subtree_hash)?;
             }
 
             self.nodes.remove(&current_hash);
@@ -239,7 +329,7 @@ where
         let _root_weight = self.update_weight(start_block_root, weight_fn)?;
 
         let start_node = self.get_node(start_block_root)?;
-        let head_node = self.find_head_from(start_node)?;
+        let head_node = self.find_head_from(start_node, start_block_slot)?;
 
         Ok(head_node.block_hash)
     }
@@ -251,31 +341,32 @@ where
         }
     }
 
-    fn find_head_from<'a>(&'a self, start_node: &'a Node) -> Result<&'a Node> {
-        if start_node.does_not_have_children() {
+    // Corresponds to the loop in `get_head` in the spec.
+    fn find_head_from<'a>(
+        &'a self,
+        start_node: &'a Node,
+        justified_slot: Slot,
+    ) -> Result<&'a Node> {
+        let children = start_node
+            .children
+            .iter()
+            // This check is primarily for the first iteration, where we must ensure that
+            // we only consider votes that were made after the last justified checkpoint.
+            .filter(|c| c.successor_slot > justified_slot)
+            .map(|c| self.get_node(c.hash))
+            .collect::<Result<Vec<&Node>>>()?;
+
+        if children.is_empty() {
             Ok(start_node)
         } else {
-            let children = start_node
-                .children
-                .iter()
-                .map(|hash| self.get_node(*hash))
-                .collect::<Result<Vec<&Node>>>()?;
-
-            // TODO: check if `max_by` is `O(n^2)`.
             let best_child = children
                 .iter()
-                .max_by(|a, b| {
-                    if a.weight != b.weight {
-                        a.weight.cmp(&b.weight)
-                    } else {
-                        a.block_hash.cmp(&b.block_hash)
-                    }
-                })
+                .max_by_key(|child| (child.weight, child.block_hash))
                 // There can only be no maximum if there are no children. This code path is guarded
                 // against that condition.
                 .expect("There must be a maximally weighted node.");
 
-            self.find_head_from(best_child)
+            self.find_head_from(best_child, justified_slot)
         }
     }
 
@@ -288,8 +379,8 @@ where
 
             let mut weight = 0;
 
-            for &child in &node.children {
-                weight += self.update_weight(child, weight_fn)?;
+            for child in &node.children {
+                weight += self.update_weight(child.hash, weight_fn)?;
             }
 
             for &voter in &node.voters {
@@ -323,13 +414,13 @@ where
                         //
                         // Load the child of the node and set it's parent to be the parent of this
                         // node (viz., graft the node's child to the node's parent)
-                        let child = self.get_mut_node(node.children[0])?;
+                        let child = self.get_mut_node(node.children[0].hash)?;
                         child.parent_hash = node.parent_hash;
 
                         // Graft the parent of this node to it's child.
                         if let Some(parent_hash) = node.parent_hash {
                             let parent = self.get_mut_node(parent_hash)?;
-                            parent.replace_child(node.block_hash, node.children[0])?;
+                            parent.replace_child_hash(node.block_hash, node.children[0].hash)?;
                         }
 
                         self.nodes.remove(&vote.hash);
@@ -376,15 +467,16 @@ where
                 let node = node.clone();
 
                 if let Some(parent_hash) = node.parent_hash {
-                    if (node.children.len() == 1) && !node.has_votes() {
-                        let child_hash = node.children[0];
+                    if node.children.len() == 1 && !node.has_votes() {
+                        let child = &node.children[0];
 
                         // Graft the single descendant `node` to the `parent` of node.
-                        self.get_mut_node(child_hash)?.parent_hash = Some(parent_hash);
+                        self.get_mut_node(child.hash)?.parent_hash = Some(parent_hash);
 
                         // Detach `node` from `parent`, replacing it with `child`.
+                        // Preserve the parent's direct descendant slot.
                         self.get_mut_node(parent_hash)?
-                            .replace_child(hash, child_hash)?;
+                            .replace_child_hash(hash, child.hash)?;
 
                         true
                     } else {
@@ -442,6 +534,40 @@ where
         Ok(())
     }
 
+    /// Find the direct successor block of `ancestor` if `descendant` is a descendant.
+    fn find_ancestor_successor_opt(
+        &self,
+        ancestor: Hash256,
+        descendant: Hash256,
+    ) -> Result<Option<Hash256>> {
+        Ok(std::iter::once(descendant)
+            .chain(
+                self.iter_ancestors(descendant)?
+                    .take_while(|(_, slot)| *slot >= self.root_slot())
+                    .map(|(block_hash, _)| block_hash),
+            )
+            .tuple_windows()
+            .find_map(|(successor, block_hash)| {
+                if block_hash == ancestor {
+                    Some(successor)
+                } else {
+                    None
+                }
+            }))
+    }
+
+    /// Same as `find_ancestor_successor_opt` but will return an error instead of an option.
+    fn find_ancestor_successor(&self, ancestor: Hash256, descendant: Hash256) -> Result<Hash256> {
+        self.find_ancestor_successor_opt(ancestor, descendant)?
+            .ok_or_else(|| Error::MissingSuccessor(ancestor, descendant))
+    }
+
+    /// Look up the successor of the given `ancestor`, returning the slot of that block.
+    fn find_ancestor_successor_slot(&self, ancestor: Hash256, descendant: Hash256) -> Result<Slot> {
+        let successor_hash = self.find_ancestor_successor(ancestor, descendant)?;
+        Ok(self.get_block(successor_hash)?.slot)
+    }
+
     /// Add `node` to the reduced tree, returning an error if `node` is not rooted in the tree.
     fn add_node(&mut self, mut node: Node) -> Result<()> {
         // Find the highest (by slot) ancestor of the given node in the reduced tree.
@@ -460,7 +586,9 @@ where
         //    `node` to it.
         // 3. Graft `node` to an existing node.
         if !prev_in_tree.children.is_empty() {
-            for &child_hash in &prev_in_tree.children {
+            for child_link in &prev_in_tree.children {
+                let child_hash = child_link.hash;
+
                 // 1. Graft the new node between two existing nodes.
                 //
                 // If `node` is a descendant of `prev_in_tree` but an ancestor of a child connected to
@@ -468,19 +596,20 @@ where
                 //
                 // This means that `node` can be grafted between `prev_in_tree` and the child that is a
                 // descendant of both `node` and `prev_in_tree`.
-                if self
-                    .iter_ancestors(child_hash)?
-                    .take_while(|(_, slot)| *slot >= self.root_slot())
-                    .any(|(ancestor, _slot)| ancestor == node.block_hash)
+                if let Some(successor) =
+                    self.find_ancestor_successor_opt(node.block_hash, child_hash)?
                 {
                     let child = self.get_mut_node(child_hash)?;
 
                     // Graft `child` to `node`.
                     child.parent_hash = Some(node.block_hash);
                     // Graft `node` to `child`.
-                    node.children.push(child_hash);
+                    node.children.push(ChildLink {
+                        hash: child_hash,
+                        successor_slot: self.get_block(successor)?.slot,
+                    });
                     // Detach `child` from `prev_in_tree`, replacing it with `node`.
-                    prev_in_tree.replace_child(child_hash, node.block_hash)?;
+                    prev_in_tree.replace_child_hash(child_hash, node.block_hash)?;
                     // Graft `node` to `prev_in_tree`.
                     node.parent_hash = Some(prev_in_tree.block_hash);
 
@@ -495,7 +624,8 @@ where
             // any of the children of `prev_in_tree`, we know that `node` is on a different fork to
             // all of the children of `prev_in_tree`.
             if node.parent_hash.is_none() {
-                for &child_hash in &prev_in_tree.children {
+                for child_link in &prev_in_tree.children {
+                    let child_hash = child_link.hash;
                     // Find the highest (by slot) common ancestor between `node` and `child`.
                     //
                     // The common ancestor is the last block before `node` and `child` forked.
@@ -506,24 +636,37 @@ where
                     // must add this new block into the tree (because it is a decision node
                     // between two forks).
                     if ancestor_hash != prev_in_tree.block_hash {
-                        let child = self.get_mut_node(child_hash)?;
-
                         // Create a new `common_ancestor` node which represents the `ancestor_hash`
                         // block, has `prev_in_tree` as the parent and has both `node` and `child`
                         // as children.
                         let common_ancestor = Node {
                             block_hash: ancestor_hash,
                             parent_hash: Some(prev_in_tree.block_hash),
-                            children: vec![node.block_hash, child_hash],
+                            children: vec![
+                                ChildLink {
+                                    hash: node.block_hash,
+                                    successor_slot: self.find_ancestor_successor_slot(
+                                        ancestor_hash,
+                                        node.block_hash,
+                                    )?,
+                                },
+                                ChildLink {
+                                    hash: child_hash,
+                                    successor_slot: self
+                                        .find_ancestor_successor_slot(ancestor_hash, child_hash)?,
+                                },
+                            ],
                             ..Node::default()
                         };
+
+                        let child = self.get_mut_node(child_hash)?;
 
                         // Graft `child` and `node` to `common_ancestor`.
                         child.parent_hash = Some(common_ancestor.block_hash);
                         node.parent_hash = Some(common_ancestor.block_hash);
 
                         // Detach `child` from `prev_in_tree`, replacing it with `common_ancestor`.
-                        prev_in_tree.replace_child(child_hash, common_ancestor.block_hash)?;
+                        prev_in_tree.replace_child_hash(child_hash, common_ancestor.block_hash)?;
 
                         // Store the new `common_ancestor` node.
                         self.nodes
@@ -540,7 +683,11 @@ where
             //
             // Graft `node` to `prev_in_tree` and `prev_in_tree` to `node`
             node.parent_hash = Some(prev_in_tree.block_hash);
-            prev_in_tree.children.push(node.block_hash);
+            prev_in_tree.children.push(ChildLink {
+                hash: node.block_hash,
+                successor_slot: self
+                    .find_ancestor_successor_slot(prev_in_tree.block_hash, node.block_hash)?,
+            });
         }
 
         // Update `prev_in_tree`. A mutable reference was not maintained to satisfy the borrow
@@ -608,7 +755,7 @@ where
 
     fn iter_ancestors(&self, child: Hash256) -> Result<BlockRootsIterator<E, T>> {
         let block = self.get_block(child)?;
-        let state = self.get_state(block.state_root)?;
+        let state = self.get_state(block.state_root, block.slot)?;
 
         Ok(BlockRootsIterator::owned(self.store.clone(), state))
     }
@@ -655,7 +802,17 @@ where
 
                 node.children
                     .iter()
-                    .map(|child| verify_node_exists(*child, "child_must_exist".to_string()))
+                    .map(|child| {
+                        verify_node_exists(child.hash, "child_must_exist".to_string())?;
+
+                        if self.find_ancestor_successor_slot(node.block_hash, child.hash)?
+                            == child.successor_slot
+                        {
+                            Ok(())
+                        } else {
+                            Err("successor slot on child link is incorrect".to_string())
+                        }
+                    })
                     .collect::<std::result::Result<(), String>>()?;
 
                 verify_node_exists(node.block_hash, "block hash must exist".to_string())?;
@@ -685,38 +842,58 @@ where
             .ok_or_else(|| Error::MissingBlock(block_root))
     }
 
-    fn get_state(&self, state_root: Hash256) -> Result<BeaconState<E>> {
+    fn get_state(&self, state_root: Hash256, slot: Slot) -> Result<BeaconState<E>> {
         self.store
-            .get::<BeaconState<E>>(&state_root)?
+            .get_state(&state_root, Some(slot))?
             .ok_or_else(|| Error::MissingState(state_root))
     }
 
     fn root_slot(&self) -> Slot {
         self.root.1
     }
+
+    fn as_bytes(&self) -> Vec<u8> {
+        let reduced_tree_ssz: ReducedTreeSsz = ReducedTreeSsz::from_reduced_tree(&self);
+        reduced_tree_ssz.as_ssz_bytes()
+    }
+
+    fn from_bytes(bytes: &[u8], store: Arc<T>) -> Result<Self> {
+        let reduced_tree_ssz = ReducedTreeSsz::from_ssz_bytes(bytes)?;
+        Ok(reduced_tree_ssz.to_reduced_tree(store)?)
+    }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Node {
+    /// Hash of the parent node in the reduced tree (not necessarily parent block).
     pub parent_hash: Option<Hash256>,
-    pub children: Vec<Hash256>,
+    pub children: Vec<ChildLink>,
     pub weight: u64,
     pub block_hash: Hash256,
     pub voters: Vec<usize>,
 }
 
-impl Node {
-    pub fn does_not_have_children(&self) -> bool {
-        self.children.is_empty()
-    }
+#[derive(Default, Clone, Debug, PartialEq, Encode, Decode)]
+pub struct ChildLink {
+    /// Hash of the child block (may not be a direct descendant).
+    pub hash: Hash256,
+    /// Slot of the block which is a direct descendant on the chain leading to `hash`.
+    ///
+    /// Node <--- Successor <--- ... <--- Child
+    pub successor_slot: Slot,
+}
 
-    pub fn replace_child(&mut self, old: Hash256, new: Hash256) -> Result<()> {
+impl Node {
+    /// Replace a child with a new child, whilst preserving the successor slot.
+    ///
+    /// The new child should have the same ancestor successor block as the old one.
+    pub fn replace_child_hash(&mut self, old: Hash256, new: Hash256) -> Result<()> {
         let i = self
             .children
             .iter()
-            .position(|&c| c == old)
+            .position(|c| c.hash == old)
             .ok_or_else(|| Error::MissingChild(old))?;
-        self.children[i] = new;
+        self.children[i].hash = new;
 
         Ok(())
     }
@@ -725,7 +902,7 @@ impl Node {
         let i = self
             .children
             .iter()
-            .position(|&c| c == child)
+            .position(|c| c.hash == child)
             .ok_or_else(|| Error::MissingChild(child))?;
 
         self.children.remove(i);
@@ -747,7 +924,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Encode, Decode)]
 pub struct Vote {
     hash: Hash256,
     slot: Slot,
@@ -757,7 +934,7 @@ pub struct Vote {
 ///
 /// E.g., a `get` or `insert` to an out-of-bounds element will cause the Vec to grow (using
 /// Default) to the smallest size required to fulfill the request.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct ElasticList<T>(Vec<T>);
 
 impl<T> ElasticList<T>
@@ -788,5 +965,28 @@ where
 impl From<Error> for String {
     fn from(e: Error) -> String {
         format!("{:?}", e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use store::MemoryStore;
+    use types::eth_spec::MinimalEthSpec;
+
+    #[test]
+    fn test_reduced_tree_ssz() {
+        let store = Arc::new(MemoryStore::<MinimalEthSpec>::open());
+        let tree = ReducedTree::new(
+            store.clone(),
+            &BeaconBlock::empty(&MinimalEthSpec::default_spec()),
+            Hash256::zero(),
+        );
+        let ssz_tree = ReducedTreeSsz::from_reduced_tree(&tree);
+        let bytes = tree.as_bytes();
+        let recovered_tree = ReducedTree::from_bytes(&bytes, store.clone()).unwrap();
+
+        let recovered_ssz = ReducedTreeSsz::from_reduced_tree(&recovered_tree);
+        assert_eq!(ssz_tree, recovered_ssz);
     }
 }

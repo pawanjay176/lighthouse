@@ -1,5 +1,4 @@
 use crate::behaviour::{Behaviour, BehaviourEvent, PubsubMessage};
-use crate::config::*;
 use crate::error;
 use crate::multiaddr::Protocol;
 use crate::rpc::RPCEvent;
@@ -8,32 +7,41 @@ use crate::{Topic, TopicHash};
 use futures::prelude::*;
 use futures::Stream;
 use libp2p::core::{
-    identity::Keypair,
-    multiaddr::Multiaddr,
-    muxing::StreamMuxerBox,
-    nodes::Substream,
-    transport::boxed::Boxed,
-    upgrade::{InboundUpgradeExt, OutboundUpgradeExt},
+    identity::Keypair, multiaddr::Multiaddr, muxing::StreamMuxerBox, nodes::Substream,
+    transport::boxed::Boxed, ConnectedPoint,
 };
-use libp2p::{core, secio, PeerId, Swarm, Transport};
-use slog::{crit, debug, info, trace, warn};
+use libp2p::gossipsub::MessageId;
+use libp2p::{core, secio, swarm::NetworkBehaviour, PeerId, Swarm, Transport};
+use slog::{crit, debug, error, info, trace, warn};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
+use tokio::timer::DelayQueue;
 
 type Libp2pStream = Boxed<(PeerId, StreamMuxerBox), Error>;
 type Libp2pBehaviour = Behaviour<Substream<StreamMuxerBox>>;
 
 const NETWORK_KEY_FILENAME: &str = "key";
+/// The time in milliseconds to wait before banning a peer. This allows for any Goodbye messages to be
+/// flushed and protocols to be negotiated.
+const BAN_PEER_WAIT_TIMEOUT: u64 = 200;
 
 /// The configuration and state of the libp2p components for the beacon node.
 pub struct Service {
     /// The libp2p Swarm handler.
     //TODO: Make this private
     pub swarm: Swarm<Libp2pStream, Libp2pBehaviour>,
+
     /// This node's PeerId.
     pub local_peer_id: PeerId,
+
+    /// A current list of peers to ban after a given timeout.
+    peers_to_ban: DelayQueue<PeerId>,
+
+    /// A list of timeouts after which peers become unbanned.
+    peer_ban_timeout: DelayQueue<PeerId>,
+
     /// The libp2p logger handle.
     pub log: slog::Logger,
 }
@@ -112,51 +120,36 @@ impl Service {
             }
         }
 
-        // subscribe to default gossipsub topics
-        let mut topics = vec![];
-
-        /* Here we subscribe to all the required gossipsub topics required for interop.
-         * The topic builder adds the required prefix and postfix to the hardcoded topics that we
-         * must subscribe to.
-         */
-        let topic_builder = |topic| {
-            Topic::new(format!(
-                "/{}/{}/{}",
-                TOPIC_PREFIX, topic, TOPIC_ENCODING_POSTFIX,
-            ))
-        };
-        topics.push(topic_builder(BEACON_BLOCK_TOPIC));
-        topics.push(topic_builder(BEACON_ATTESTATION_TOPIC));
-        topics.push(topic_builder(VOLUNTARY_EXIT_TOPIC));
-        topics.push(topic_builder(PROPOSER_SLASHING_TOPIC));
-        topics.push(topic_builder(ATTESTER_SLASHING_TOPIC));
-
-        // Add any topics specified by the user
-        topics.append(
-            &mut config
-                .topics
-                .iter()
-                .cloned()
-                .map(|s| Topic::new(s))
-                .collect(),
-        );
-
-        let mut subscribed_topics = vec![];
-        for topic in topics {
-            if swarm.subscribe(topic.clone()) {
-                trace!(log, "Subscribed to topic"; "topic" => format!("{}", topic));
-                subscribed_topics.push(topic);
+        let mut subscribed_topics: Vec<String> = vec![];
+        for topic in config.topics {
+            let raw_topic: Topic = topic.into();
+            let topic_string = raw_topic.no_hash();
+            if swarm.subscribe(raw_topic.clone()) {
+                trace!(log, "Subscribed to topic"; "topic" => format!("{}", topic_string));
+                subscribed_topics.push(topic_string.as_str().into());
             } else {
-                warn!(log, "Could not subscribe to topic"; "topic" => format!("{}", topic));
+                warn!(log, "Could not subscribe to topic"; "topic" => format!("{}",topic_string));
             }
         }
-        info!(log, "Subscribed to topics"; "topics" => format!("{:?}", subscribed_topics.iter().map(|t| format!("{}", t)).collect::<Vec<String>>()));
+        info!(log, "Subscribed to topics"; "topics" => format!("{:?}", subscribed_topics));
 
         Ok(Service {
             local_peer_id,
             swarm,
+            peers_to_ban: DelayQueue::new(),
+            peer_ban_timeout: DelayQueue::new(),
             log,
         })
+    }
+
+    /// Adds a peer to be banned for a period of time, specified by a timeout.
+    pub fn disconnect_and_ban_peer(&mut self, peer_id: PeerId, timeout: Duration) {
+        error!(self.log, "Disconnecting and banning peer"; "peer_id" => format!("{:?}", peer_id), "timeout" => format!("{:?}", timeout));
+        self.peers_to_ban.insert(
+            peer_id.clone(),
+            Duration::from_millis(BAN_PEER_WAIT_TIMEOUT),
+        );
+        self.peer_ban_timeout.insert(peer_id, timeout);
     }
 }
 
@@ -191,12 +184,59 @@ impl Stream for Service {
                     BehaviourEvent::PeerDisconnected(peer_id) => {
                         return Ok(Async::Ready(Some(Libp2pEvent::PeerDisconnected(peer_id))));
                     }
+                    BehaviourEvent::PeerSubscribed(peer_id, topic) => {
+                        return Ok(Async::Ready(Some(Libp2pEvent::PeerSubscribed(
+                            peer_id, topic,
+                        ))));
+                    }
                 },
                 Ok(Async::Ready(None)) => unreachable!("Swarm stream shouldn't end"),
                 Ok(Async::NotReady) => break,
                 _ => break,
             }
         }
+
+        // check if peers need to be banned
+        loop {
+            match self.peers_to_ban.poll() {
+                Ok(Async::Ready(Some(peer_id))) => {
+                    let peer_id = peer_id.into_inner();
+                    Swarm::ban_peer_id(&mut self.swarm, peer_id.clone());
+                    // TODO: Correctly notify protocols of the disconnect
+                    // TODO: Also remove peer from the DHT: https://github.com/sigp/lighthouse/issues/629
+                    let dummy_connected_point = ConnectedPoint::Dialer {
+                        address: "/ip4/0.0.0.0"
+                            .parse::<Multiaddr>()
+                            .expect("valid multiaddr"),
+                    };
+                    self.swarm
+                        .inject_disconnected(&peer_id, dummy_connected_point);
+                    // inform the behaviour that the peer has been banned
+                    self.swarm.peer_banned(peer_id);
+                }
+                Ok(Async::NotReady) | Ok(Async::Ready(None)) => break,
+                Err(e) => {
+                    warn!(self.log, "Peer banning queue failed"; "error" => format!("{:?}", e));
+                }
+            }
+        }
+
+        // un-ban peer if it's timeout has expired
+        loop {
+            match self.peer_ban_timeout.poll() {
+                Ok(Async::Ready(Some(peer_id))) => {
+                    let peer_id = peer_id.into_inner();
+                    debug!(self.log, "Peer has been unbanned"; "peer" => format!("{:?}", peer_id));
+                    self.swarm.peer_unbanned(&peer_id);
+                    Swarm::unban_peer_id(&mut self.swarm, peer_id);
+                }
+                Ok(Async::NotReady) | Ok(Async::Ready(None)) => break,
+                Err(e) => {
+                    warn!(self.log, "Peer banning timeout queue failed"; "error" => format!("{:?}", e));
+                }
+            }
+        }
+
         Ok(Async::NotReady)
     }
 }
@@ -206,7 +246,7 @@ impl Stream for Service {
 fn build_transport(local_private_key: Keypair) -> Boxed<(PeerId, StreamMuxerBox), Error> {
     // TODO: The Wire protocol currently doesn't specify encryption and this will need to be customised
     // in the future.
-    let transport = libp2p::tcp::TcpConfig::new();
+    let transport = libp2p::tcp::TcpConfig::new().nodelay(true);
     let transport = libp2p::dns::DnsConfig::new(transport);
     #[cfg(feature = "libp2p-websocket")]
     let transport = {
@@ -214,22 +254,15 @@ fn build_transport(local_private_key: Keypair) -> Boxed<(PeerId, StreamMuxerBox)
         transport.or_transport(websocket::WsConfig::new(trans_clone))
     };
     transport
-        .with_upgrade(secio::SecioConfig::new(local_private_key))
-        .and_then(move |out, endpoint| {
-            let peer_id = out.remote_key.into_peer_id();
-            let peer_id2 = peer_id.clone();
-            let upgrade = core::upgrade::SelectUpgrade::new(
-                libp2p::yamux::Config::default(),
-                libp2p::mplex::MplexConfig::new(),
-            )
-            // TODO: use a single `.map` instead of two maps
-            .map_inbound(move |muxer| (peer_id, muxer))
-            .map_outbound(move |muxer| (peer_id2, muxer));
-
-            core::upgrade::apply(out.stream, upgrade, endpoint)
-                .map(|(id, muxer)| (id, core::muxing::StreamMuxerBox::new(muxer)))
-        })
-        .with_timeout(Duration::from_secs(20))
+        .upgrade(core::upgrade::Version::V1)
+        .authenticate(secio::SecioConfig::new(local_private_key))
+        .multiplex(core::upgrade::SelectUpgrade::new(
+            libp2p::yamux::Config::default(),
+            libp2p::mplex::MplexConfig::new(),
+        ))
+        .map(|(peer, muxer), _| (peer, core::muxing::StreamMuxerBox::new(muxer)))
+        .timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(20))
         .map_err(|err| Error::new(ErrorKind::Other, err))
         .boxed()
 }
@@ -244,11 +277,13 @@ pub enum Libp2pEvent {
     PeerDisconnected(PeerId),
     /// Received pubsub message.
     PubsubMessage {
-        id: String,
+        id: MessageId,
         source: PeerId,
         topics: Vec<TopicHash>,
         message: PubsubMessage,
     },
+    /// Subscribed to peer for a topic hash.
+    PeerSubscribed(PeerId, TopicHash),
 }
 
 fn keypair_from_hex(hex_bytes: &str) -> error::Result<Keypair> {

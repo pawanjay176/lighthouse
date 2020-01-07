@@ -29,10 +29,10 @@ impl SlotClock for SystemTimeSlotClock {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
         let genesis = self.genesis_duration;
 
-        if now > genesis {
+        if now >= genesis {
             let since_genesis = now
                 .checked_sub(genesis)
-                .expect("Control flow ensures now is greater than genesis");
+                .expect("Control flow ensures now is greater than or equal to genesis");
             let slot =
                 Slot::from((since_genesis.as_millis() / self.slot_duration.as_millis()) as u64);
             Some(slot + self.genesis_slot)
@@ -50,11 +50,40 @@ impl SlotClock for SystemTimeSlotClock {
             genesis + slot * self.slot_duration
         };
 
-        if now > genesis {
+        if now >= genesis {
             Some(
                 slot_start(self.now()? + 1)
                     .checked_sub(now)
                     .expect("The next slot cannot start before now"),
+            )
+        } else {
+            Some(
+                genesis
+                    .checked_sub(now)
+                    .expect("Control flow ensures genesis is greater than or equal to now"),
+            )
+        }
+    }
+
+    fn duration_to_next_epoch(&self, slots_per_epoch: u64) -> Option<Duration> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+        let genesis = self.genesis_duration;
+
+        let slot_start = |slot: Slot| -> Duration {
+            let slot = slot.as_u64() as u32;
+            genesis + slot * self.slot_duration
+        };
+
+        let epoch_start_slot = self
+            .now()
+            .map(|slot| slot.epoch(slots_per_epoch))
+            .map(|epoch| (epoch + 1).start_slot(slots_per_epoch))?;
+
+        if now >= genesis {
+            Some(
+                slot_start(epoch_start_slot)
+                    .checked_sub(now)
+                    .expect("The next epoch cannot start before now"),
             )
         } else {
             Some(
@@ -100,12 +129,12 @@ mod tests {
         let clock =
             SystemTimeSlotClock::new(genesis_slot, prior_genesis(500), Duration::from_secs(1));
         assert_eq!(clock.now(), Some(Slot::new(0)));
-        assert!(clock.duration_to_next_slot().unwrap() < Duration::from_millis(500));
+        assert!(clock.duration_to_next_slot().unwrap() <= Duration::from_millis(500));
 
         let clock =
             SystemTimeSlotClock::new(genesis_slot, prior_genesis(1_500), Duration::from_secs(1));
         assert_eq!(clock.now(), Some(Slot::new(1)));
-        assert!(clock.duration_to_next_slot().unwrap() < Duration::from_millis(500));
+        assert!(clock.duration_to_next_slot().unwrap() <= Duration::from_millis(500));
     }
 
     #[test]
