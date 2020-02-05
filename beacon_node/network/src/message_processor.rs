@@ -6,6 +6,7 @@ use beacon_chain::{
 use eth2_libp2p::rpc::methods::*;
 use eth2_libp2p::rpc::{RPCEvent, RPCRequest, RPCResponse, RequestId};
 use eth2_libp2p::PeerId;
+use rand::prelude::*;
 use slog::{debug, error, o, trace, warn};
 use ssz::Encode;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ use store::Store;
 use tokio::sync::{mpsc, oneshot};
 use tree_hash::SignedRoot;
 use types::{Attestation, BeaconBlock, Epoch, EthSpec, Hash256, Slot};
+
+const THRESHOLD: f64 = 0.33;
 
 //TODO: Rate limit requests
 
@@ -62,6 +65,8 @@ pub struct MessageProcessor<T: BeaconChainTypes> {
     _sync_exit: oneshot::Sender<()>,
     /// A network context to return and handle RPC requests.
     network: HandlerNetworkContext,
+    /// Respond to rpc requests only THRESHOLD% of the time
+    is_naughty: bool,
     /// The `RPCHandler` logger.
     log: slog::Logger,
 }
@@ -72,6 +77,7 @@ impl<T: BeaconChainTypes> MessageProcessor<T> {
         executor: &tokio::runtime::TaskExecutor,
         beacon_chain: Arc<BeaconChain<T>>,
         network_send: mpsc::UnboundedSender<NetworkMessage>,
+        is_naughty: bool,
         log: &slog::Logger,
     ) -> Self {
         let sync_logger = log.new(o!("service"=> "sync"));
@@ -89,6 +95,7 @@ impl<T: BeaconChainTypes> MessageProcessor<T> {
             sync_send,
             _sync_exit,
             network: HandlerNetworkContext::new(network_send, log.clone()),
+            is_naughty,
             log: log.clone(),
         }
     }
@@ -347,6 +354,11 @@ impl<T: BeaconChainTypes> MessageProcessor<T> {
             "start_slot" => req.start_slot,
             "step" => req.step,
         );
+
+        if self.is_naughty && behave_naughty() {
+            debug!(self.log, "Not responding! MUHAHAHAHA");
+            return;
+        }
 
         if req.step == 0 {
             warn!(self.log,
@@ -685,5 +697,16 @@ impl HandlerNetworkContext {
                     "Could not send RPC message to the network service"
                 )
             });
+    }
+}
+
+/// Returns true only THRESHOLD % of the times its called.
+fn behave_naughty() -> bool {
+    let mut rng = rand::thread_rng();
+    let y: f64 = rng.gen();
+    if y < THRESHOLD {
+        return true;
+    } else {
+        false
     }
 }

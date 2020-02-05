@@ -56,6 +56,9 @@ pub struct Config {
     /// testing purposes and will likely be removed in future versions.
     // TODO: Remove this functionality for mainnet
     pub propagation_percentage: Option<u8>,
+
+    /// Sync only responds to 1/3 of the requests if this flag is true.
+    pub is_naughty_sync: bool,
 }
 
 impl Default for Config {
@@ -105,6 +108,7 @@ impl Default for Config {
             client_version: version::version(),
             topics,
             propagation_percentage: None,
+            is_naughty_sync: false,
         }
     }
 }

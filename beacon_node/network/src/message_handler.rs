@@ -50,6 +50,7 @@ impl<T: BeaconChainTypes> MessageHandler<T> {
         beacon_chain: Arc<BeaconChain<T>>,
         network_send: mpsc::UnboundedSender<NetworkMessage>,
         executor: &tokio::runtime::TaskExecutor,
+        is_naughty: bool,
         log: slog::Logger,
     ) -> error::Result<mpsc::UnboundedSender<HandlerMessage>> {
         let message_handler_log = log.new(o!("service"=> "msg_handler"));
@@ -58,8 +59,13 @@ impl<T: BeaconChainTypes> MessageHandler<T> {
         let (handler_send, handler_recv) = mpsc::unbounded_channel();
 
         // Initialise a message instance, which itself spawns the syncing thread.
-        let message_processor =
-            MessageProcessor::new(executor, beacon_chain, network_send.clone(), &log);
+        let message_processor = MessageProcessor::new(
+            executor,
+            beacon_chain,
+            network_send.clone(),
+            is_naughty,
+            &log,
+        );
 
         // generate the Message handler
         let mut handler = MessageHandler {

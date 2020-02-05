@@ -66,7 +66,7 @@ pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
                     Arg::with_name("strategy")
                         .long("strategy")
                         .takes_value(true)
-                        .possible_values(&["one-node", "two-nodes", "mixed", "all"])
+                        .possible_values(&["one-node", "two-nodes", "mixed", "all", "naughty"])
                         .help("Sync strategy to run. (default all)"),
                 ),
         )

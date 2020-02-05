@@ -83,18 +83,28 @@ impl<E: EthSpec> LocalNetwork<E> {
     ) -> impl Future<Item = (), Error = String> {
         let self_1 = self.clone();
         println!("Adding beacon node..");
-        self.beacon_nodes
-            .read()
-            .first()
-            .map(|boot_node| {
-                beacon_config.network.boot_nodes.push(
-                    boot_node
-                        .client
-                        .enr()
-                        .expect("bootnode must have a network"),
-                );
+        let mut all_nodes = (*self.beacon_nodes.read())
+            .iter()
+            .map(|node| {
+                node.client
+                    .enr()
+                    .clone()
+                    .expect("bootnode must have a network")
             })
-            .expect("should have atleast one node");
+            .collect();
+        // self.beacon_nodes
+        //     .read()
+        //     .first()
+        //     .map(|boot_node| {
+        //         beacon_config.network.boot_nodes.push(
+        //             boot_node
+        //                 .client
+        //                 .enr()
+        //                 .expect("bootnode must have a network"),
+        //         );
+        //     })
+        //     .expect("should have atleast one node");
+        beacon_config.network.boot_nodes.append(&mut all_nodes);
 
         let index = self.beacon_nodes.read().len();
 

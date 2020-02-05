@@ -35,6 +35,13 @@ pub fn pick_strategy<E: EthSpec>(
             initial_delay,
             sync_delay,
         )),
+        "naughty" => Box::new(naughty_sync(
+            network,
+            beacon_config,
+            slot_duration,
+            initial_delay,
+            sync_delay,
+        )),
         "all" => Box::new(verify_syncing(
             network,
             beacon_config,
@@ -157,6 +164,47 @@ pub fn verify_in_between_sync<E: EthSpec>(
     .and_then(move |(epoch, network)| {
         verify_all_finalized_at(network, epoch).map_err(|e| format!("In between sync error: {}", e))
     })
+}
+
+/// Add a naughty syncing node after `initial_delay` epochs.
+/// naughty node responds to only 1/3 of rpc requests.
+/// naughty node syncs with bootnode.
+/// Add another node which would try to sync from bootnode and naughty node.
+/// Ideally, naughty node should be kicked out by second node.
+pub fn naughty_sync<E: EthSpec>(
+    network: LocalNetwork<E>,
+    beacon_config: ClientConfig,
+    slot_duration: Duration,
+    initial_delay: u64,
+    sync_delay: u64,
+) -> impl Future<Item = (), Error = String> {
+    // Delay for `initial_delay` epochs before adding another node to start syncing
+    epoch_delay(
+        Epoch::new(initial_delay),
+        slot_duration,
+        E::slots_per_epoch(),
+    )
+    .and_then(move |_| {
+        let mut naughty_config = beacon_config.clone();
+        naughty_config.network.is_naughty_sync = true;
+        naughty_config.network.libp2p_port = 42425;
+        naughty_config.network.discovery_port = 42425;
+        // Add naughty node
+        network
+            .add_beacon_node(naughty_config)
+            .map(|_| (network, beacon_config))
+    })
+    .and_then(move |(network, beacon_config)| {
+        // Delay for `sync_delay` epochs before verifying synced state.
+        epoch_delay(Epoch::new(sync_delay), slot_duration, E::slots_per_epoch())
+            .map(|_| (network, beacon_config))
+    })
+    .and_then(move |(network, beacon_config)| {
+        // Add nice node
+        network.add_beacon_node(beacon_config.clone())
+    })
+    // Run indefinitely. Check if naughty node gets kicked out from logs.
+    .and_then(move |_| futures::future::empty().map_err(|()| "".to_string()))
 }
 
 /// Run syncing strategies one after other.

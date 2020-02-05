@@ -280,7 +280,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         self.update_state();
     }
 
-    /// The response to a `BlocksByRoot` request.
+    /// Process the response to a `BlocksByRoot` request.
     /// The current implementation takes one block at a time. As blocks are streamed, any
     /// subsequent blocks will simply be ignored.
     /// There are two reasons we could have received a BlocksByRoot response

@@ -47,6 +47,7 @@ impl<T: BeaconChainTypes> Service<T> {
             beacon_chain,
             network_send.clone(),
             executor,
+            config.is_naughty_sync,
             network_log.clone(),
         )?;
 
