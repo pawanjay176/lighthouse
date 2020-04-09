@@ -22,7 +22,7 @@ pub use validator_client::Config as ValidatorConfig;
 /// Intended for use in testing and simulation. Not for production.
 pub struct LocalBeaconNode<E: EthSpec> {
     pub client: ProductionClient<E>,
-    pub datadir: TempDir,
+    pub datadir: PathBuf,
 }
 
 impl<E: EthSpec> LocalBeaconNode<E> {
@@ -34,12 +34,12 @@ impl<E: EthSpec> LocalBeaconNode<E> {
         mut client_config: ClientConfig,
     ) -> impl Future<Item = Self, Error = String> {
         // Creates a temporary directory that will be deleted once this `TempDir` is dropped.
-        let datadir = TempDir::new("lighthouse_node_test_rig")
-            .expect("should create temp directory for client datadir");
+        // let datadir = TempDir::new("lighthouse_node_test_rig")
+        //     .expect("should create temp directory for client datadir");
 
-        client_config.data_dir = datadir.path().into();
-        client_config.network.network_dir = PathBuf::from(datadir.path()).join("network");
-
+        // client_config.data_dir = datadir.path().into();
+        client_config.network.network_dir = PathBuf::from(&client_config.data_dir).join("network");
+        let datadir = client_config.network.network_dir.clone();
         ProductionBeaconNode::new(context, client_config).map(move |client| Self {
             client: client.into_inner(),
             datadir,

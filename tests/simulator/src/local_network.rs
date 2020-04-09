@@ -42,6 +42,27 @@ impl<E: EthSpec> Deref for LocalNetwork<E> {
 
 impl<E: EthSpec> LocalNetwork<E> {
     /// Creates a new network with a single `BeaconNode`.
+    pub fn new1(
+        context: RuntimeContext<E>,
+        mut beacon_config: ClientConfig,
+        port: u16,
+        name: String,
+    ) -> impl Future<Item = Self, Error = String> {
+        beacon_config.network.discovery_port = port;
+        beacon_config.network.libp2p_port = port;
+        beacon_config.network.enr_udp_port = Some(port);
+        beacon_config.network.enr_tcp_port = Some(port);
+        LocalBeaconNode::production(context.service_context(name), beacon_config).map(
+            |beacon_node| Self {
+                inner: Arc::new(Inner {
+                    context,
+                    beacon_nodes: RwLock::new(vec![beacon_node]),
+                    validator_clients: RwLock::new(vec![]),
+                }),
+            },
+        )
+    }
+
     pub fn new(
         context: RuntimeContext<E>,
         mut beacon_config: ClientConfig,

@@ -405,7 +405,7 @@ where
         let pubkey_cache_path = self
             .pubkey_cache_path
             .ok_or_else(|| "Cannot build without a pubkey cache path".to_string())?;
-
+        dbg!(&pubkey_cache_path);
         let validator_pubkey_cache = self
             .validator_pubkey_cache
             .map(|cache| Ok(cache))
