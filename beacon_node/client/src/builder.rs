@@ -253,7 +253,7 @@ where
 
         let timer_exit = context
             .runtime_handle
-            .enter(|| timer::spawn(beacon_chain, milliseconds_per_slot))
+            .enter(|| timer::spawn(beacon_chain, milliseconds_per_slot, context.log.clone()))
             .map_err(|e| format!("Unable to start node timer: {}", e))?;
 
         self.exit_channels.push(timer_exit);

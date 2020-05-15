@@ -3,8 +3,8 @@
 //! This service allows task execution on the beacon node for various functionality.
 
 use beacon_chain::{BeaconChain, BeaconChainTypes};
-use futures::future;
 use futures::stream::StreamExt;
+use slog::info;
 use slot_clock::SlotClock;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +17,7 @@ use tokio::time::{interval_at, Instant};
 pub fn spawn<T: BeaconChainTypes>(
     beacon_chain: Arc<BeaconChain<T>>,
     milliseconds_per_slot: u64,
+    log: slog::Logger,
 ) -> Result<tokio::sync::oneshot::Sender<()>, &'static str> {
     let (exit_signal, exit) = tokio::sync::oneshot::channel();
 
@@ -27,14 +28,22 @@ pub fn spawn<T: BeaconChainTypes>(
             .ok_or_else(|| "slot_notifier unable to determine time to next slot")?;
 
     // Warning: `interval_at` panics if `milliseconds_per_slot` = 0.
-    let timer_future = interval_at(start_instant, Duration::from_millis(milliseconds_per_slot))
-        .for_each(move |_| {
+    let mut interval = interval_at(start_instant, Duration::from_millis(milliseconds_per_slot));
+    let timer_future = async move {
+        while interval.next().await.is_some() {
             beacon_chain.per_slot_task();
-            future::ready(())
-        });
+        }
+    };
 
-    let future = futures::future::select(timer_future, exit);
+    let log_1 = log.clone();
+    let exit_future = async move {
+        let _ = exit.await.ok();
+        info!(log_1, "Timer service shutdown");
+    };
+
+    let future = futures::future::select(Box::pin(timer_future), Box::pin(exit_future));
     tokio::spawn(future);
+    info!(log, "Timer service started");
 
     Ok(exit_signal)
 }
