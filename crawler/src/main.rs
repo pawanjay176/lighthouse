@@ -1,15 +1,21 @@
+use csv::Writer;
 use eth2_libp2p::types::GossipKind;
 use eth2_libp2p::Enr;
+use eth2_libp2p::PubsubMessage;
 use eth2_libp2p::Service as LibP2PService;
 use eth2_libp2p::{BehaviourEvent, Libp2pEvent, NetworkConfig};
-use eth2_libp2p::{PubsubMessage, TopicHash};
 use libp2p::gossipsub::{GossipsubConfigBuilder, GossipsubMessage, MessageId, ValidationMode};
 use libp2p::PeerId;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use slog::{debug, o, Drain};
+use std::fs::File;
 use std::time::Duration;
 use tempdir::TempDir;
-use types::{EnrForkId, MainnetEthSpec};
+use types::{
+    AggregateSignature, Attestation, EnrForkId, Epoch, Hash256, MainnetEthSpec,
+    SignedAggregateAndProof, Slot, SubnetId,
+};
 
 pub const GOSSIP_MAX_SIZE: usize = 1_048_576;
 type E = MainnetEthSpec;
@@ -66,7 +72,7 @@ pub fn build_config(port: u16, mut boot_nodes: Vec<Enr>) -> NetworkConfig {
     config.gs_config = gs_config;
 
     // The default topics that we will initially subscribe to
-    let mut topics = vec![GossipKind::BeaconBlock, GossipKind::BeaconAggregateAndProof];
+    let mut topics = vec![GossipKind::BeaconAggregateAndProof];
     // Subscribe to all attestation subnets
     let subnet_topics: Vec<GossipKind> =
         (0..64).map(|i| GossipKind::Attestation(i.into())).collect();
@@ -124,17 +130,31 @@ async fn main() {
         LibP2PService::new(executor, &config, enr_fork_id, &log)
             .await
             .expect("should build libp2p instance");
+
+    let mut wtr_attestation = csv::Writer::from_path("attestations.csv").unwrap();
+    let mut wtr_aggregate = csv::Writer::from_path("aggregate.csv").unwrap();
+
+    // Advertise all enr subnets as listening
+    for subnet_id in 0..64 {
+        libp2p_service
+            .swarm
+            .update_enr_subnet(SubnetId::new(subnet_id), true);
+    }
     let fut = async {
         loop {
             match libp2p_service.next_event().await {
                 Libp2pEvent::Behaviour(BehaviourEvent::PubsubMessage {
-                    id,
-                    source,
-                    message,
-                    topics,
-                }) => {
-                    handle_gossip(id, source, topics, message);
-                }
+                    source, message, ..
+                }) => match message {
+                    PubsubMessage::Attestation(msg) => write_csv(
+                        &mut wtr_attestation,
+                        AttestationCSV::new(msg.1, source, None),
+                    ),
+                    PubsubMessage::AggregateAndProofAttestation(msg) => {
+                        write_csv(&mut wtr_aggregate, AggregateCSV::new(*msg, source, None))
+                    }
+                    _ => {}
+                },
                 Libp2pEvent::Behaviour(BehaviourEvent::PeerConnected(peer_id)) => {
                     debug!(
                         log,
@@ -159,9 +179,86 @@ async fn main() {
     fut.await;
 }
 
-#[allow(dead_code)]
-fn handle_gossip(id: MessageId, source: PeerId, topics: Vec<TopicHash>, message: PubsubMessage<E>) {
-    match message {
-        PubsubMessage::Attestation(msg) => {}
+#[derive(Debug, Serialize)]
+struct AttestationCSV {
+    timestamp: i64,
+    source: String,
+    client_type: Option<String>,
+    aggregation_bits: String,
+    slot: Slot,
+    index: u64,
+    beacon_block_root: Hash256,
+    source_epoch: Epoch,
+    source_root: Hash256,
+    target_epoch: Epoch,
+    target_root: Hash256,
+    signature: AggregateSignature,
+}
+
+impl AttestationCSV {
+    pub fn new(data: Attestation<E>, source: PeerId, client_type: Option<String>) -> Self {
+        let timestamp = chrono::prelude::Utc::now().timestamp_millis();
+        Self {
+            timestamp,
+            source: source.to_string(),
+            client_type,
+            aggregation_bits: hex::encode(data.aggregation_bits.into_bytes()),
+            slot: data.data.slot,
+            index: data.data.index,
+            beacon_block_root: data.data.beacon_block_root,
+            source_epoch: data.data.source.epoch,
+            source_root: data.data.source.root,
+            target_epoch: data.data.target.epoch,
+            target_root: data.data.target.root,
+            signature: data.signature,
+        }
     }
+}
+
+#[derive(Debug, Serialize)]
+struct AggregateCSV {
+    timestamp: i64,
+    source: String,
+    client_type: Option<String>,
+    aggregation_bits: String,
+    aggregator_index: u64,
+    slot: Slot,
+    index: u64,
+    beacon_block_root: Hash256,
+    source_epoch: Epoch,
+    source_root: Hash256,
+    target_epoch: Epoch,
+    target_root: Hash256,
+    aggregate_signature: AggregateSignature,
+}
+
+impl AggregateCSV {
+    pub fn new(
+        data: SignedAggregateAndProof<E>,
+        source: PeerId,
+        client_type: Option<String>,
+    ) -> Self {
+        let timestamp = chrono::prelude::Utc::now().timestamp_millis();
+        Self {
+            timestamp,
+            source: source.to_string(),
+            client_type,
+            aggregation_bits: hex::encode(data.message.aggregate.aggregation_bits.into_bytes()),
+            aggregator_index: data.message.aggregator_index,
+            slot: data.message.aggregate.data.slot,
+            index: data.message.aggregate.data.index,
+            beacon_block_root: data.message.aggregate.data.beacon_block_root,
+            source_epoch: data.message.aggregate.data.source.epoch,
+            source_root: data.message.aggregate.data.source.root,
+            target_epoch: data.message.aggregate.data.target.epoch,
+            target_root: data.message.aggregate.data.target.root,
+            aggregate_signature: data.message.aggregate.signature,
+        }
+    }
+}
+
+fn write_csv<S: Serialize + std::fmt::Debug>(writer: &mut Writer<File>, data: S) {
+    dbg!(&data);
+    writer.serialize(data).unwrap();
+    writer.flush().unwrap();
 }

@@ -10,6 +10,7 @@ edition = "2018"
 eth2_libp2p = {path = "../beacon_node/eth2_libp2p"}
 environment = { path = "../lighthouse/environment" }
 types = { path =  "../consensus/types" }
+eth2_ssz_types = { path = "../consensus/ssz_types" }
 slog = { version = "2.5.2", features = ["max_level_trace"] }
 slog-stdlog = "4.0.0"
 slog-term = "2.5.0"
@@ -17,10 +18,15 @@ slog-async = "2.5.0"
 tempdir = "0.3.7"
 exit-future = "0.2.0"
 serde = { version = "1.0.110", features = ["derive"] }
-tokio = { version = "0.2.21", features = ["time", "macros"] }
+serde_derive = "1.0.110"
+tokio = { version = "0.2.21", features = ["full"] }
 futures = "0.3.5"
 sha2 = "0.9.1"
 base64 = "0.12.1"
+csv = "1.1.3"
+chrono = "0.4.15"
+lazy_static = "1.4.0"
+hex = "0.4.2"
 
 
 [dependencies.libp2p]
