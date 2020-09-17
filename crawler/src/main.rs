@@ -8,14 +8,19 @@ use libp2p::gossipsub::{GossipsubConfigBuilder, GossipsubMessage, MessageId, Val
 use libp2p::PeerId;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use slog::{debug, o, Drain};
+use slog::{info, o, Drain};
 use std::fs::File;
+use std::io::{Read, Write};
 use std::time::Duration;
 use tempdir::TempDir;
 use types::{
     AggregateSignature, Attestation, EnrForkId, Epoch, Hash256, MainnetEthSpec,
     SignedAggregateAndProof, Slot, SubnetId,
 };
+
+const DHT_FILE_NAME: &str = "dht";
+const AGGREGATES_FILE_NAME: &str = "aggregates.csv";
+const ATTESTATIONS_FILE_NAME: &str = "attestations.csv";
 
 pub const GOSSIP_MAX_SIZE: usize = 1_048_576;
 type E = MainnetEthSpec;
@@ -110,9 +115,9 @@ async fn main() {
         "enr:-LK4QLvxLzt346gAPkTxohygiJvjd97lGcFeE5yXgZKtsMfEOveLE_FO2slJoHNzNF7vhwfwjt4X2vqzwGiR9gcrmDMBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpDnp11aAAAAAf__________gmlkgnY0gmlwhDMPRgeJc2VjcDI1NmsxoQPjXTGx3HkaCG2neFxJmaTn5eCgbra3LY1twCeXPHChL4N0Y3CCIyiDdWRwgiMo",
         "enr:-Ku4QFVactU18ogiqPPasKs3jhUm5ISszUrUMK2c6SUPbGtANXVJ2wFapsKwVEVnVKxZ7Gsr9yEc4PYF-a14ahPa1q0Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpAYrkzLAAAAAf__________gmlkgnY0gmlwhGQbAHyJc2VjcDI1NmsxoQILF-Ya2i5yowVkQtlnZLjG0kqC4qtwmSk8ha7tKLuME4N1ZHCCIyg",
     ];
-    let enrs: Vec<Enr> = enr_strs.iter().map(|e| e.parse().unwrap()).collect();
-    let config = build_config(9000, enrs);
-    let log = build_log(slog::Level::Debug, true);
+    let bootnodes: Vec<Enr> = enr_strs.iter().map(|e| e.parse().unwrap()).collect();
+    let config = build_config(9000, bootnodes);
+    let log = build_log(slog::Level::Info, true);
     let (_signal, exit) = exit_future::signal();
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
     let executor = environment::TaskExecutor::new(
@@ -131,8 +136,9 @@ async fn main() {
             .await
             .expect("should build libp2p instance");
 
-    let mut wtr_attestation = csv::Writer::from_path("attestations.csv").unwrap();
-    let mut wtr_aggregate = csv::Writer::from_path("aggregate.csv").unwrap();
+    // csv datafiles
+    let mut wtr_attestation = csv::Writer::from_path(ATTESTATIONS_FILE_NAME).unwrap();
+    let mut wtr_aggregate = csv::Writer::from_path(AGGREGATES_FILE_NAME).unwrap();
 
     // Advertise all enr subnets as listening
     for subnet_id in 0..64 {
@@ -140,43 +146,75 @@ async fn main() {
             .swarm
             .update_enr_subnet(SubnetId::new(subnet_id), true);
     }
+
+    // Add persisted enrs back to the dht
+    let enrs = load_dht().unwrap_or(vec![]);
+    info!(log, "Loading dht"; "num" => enrs.len());
+    for enr in enrs {
+        libp2p_service.swarm.add_enr(enr);
+    }
+
+    let mut rx = block_until_ctrl_c();
+
     let fut = async {
         loop {
-            match libp2p_service.next_event().await {
-                Libp2pEvent::Behaviour(BehaviourEvent::PubsubMessage {
-                    source, message, ..
-                }) => match message {
-                    PubsubMessage::Attestation(msg) => write_csv(
-                        &mut wtr_attestation,
-                        AttestationCSV::new(msg.1, source, None),
-                    ),
-                    PubsubMessage::AggregateAndProofAttestation(msg) => {
-                        write_csv(&mut wtr_aggregate, AggregateCSV::new(*msg, source, None))
+            tokio::select! {
+                _ = (&mut rx) => {
+                    info!(log, "Persisting dht");
+                    persist_dht(libp2p_service.swarm.enr_entries());
+                    return;
+                }
+                libp2p_event = libp2p_service.next_event() => {
+                    match libp2p_event {
+                    Libp2pEvent::Behaviour(BehaviourEvent::PubsubMessage {
+                        source, message, ..
+                    }) => match message {
+                        PubsubMessage::Attestation(msg) => write_csv(
+                            &mut wtr_attestation,
+                            AttestationCSV::new(msg.1, source, None),
+                        ),
+                        PubsubMessage::AggregateAndProofAttestation(msg) => {
+                            write_csv(&mut wtr_aggregate, AggregateCSV::new(*msg, source, None))
+                        }
+                        _ => {}
+                    },
+                    Libp2pEvent::Behaviour(BehaviourEvent::PeerConnected(peer_id)) => {
+                        info!(
+                            log,
+                            "Connected to peer";
+                            "peer_id" => %peer_id,
+                            "peer_count" => globals.connected_peers()
+                        );
+                    }
+                    Libp2pEvent::Behaviour(BehaviourEvent::PeerDisconnected(peer_id)) => {
+                        info!(
+                            log,
+                            "Disconnected from peer";
+                            "peer_id" => %peer_id,
+                            "peer_count" => globals.connected_peers()
+                        );
                     }
                     _ => {}
-                },
-                Libp2pEvent::Behaviour(BehaviourEvent::PeerConnected(peer_id)) => {
-                    debug!(
-                        log,
-                        "Connected to peer";
-                        "peer_id" => %peer_id,
-                        "peer_count" => globals.connected_peers()
-                    );
                 }
-                Libp2pEvent::Behaviour(BehaviourEvent::PeerDisconnected(peer_id)) => {
-                    debug!(
-                        log,
-                        "Disconnected from peer";
-                        "peer_id" => %peer_id,
-                        "peer_count" => globals.connected_peers()
-                    );
-                }
-                _ => {}
+            }
             }
         }
     };
-
     fut.await;
+}
+
+/// Block the current thread until Ctrl+C is received.
+pub fn block_until_ctrl_c() -> tokio::sync::oneshot::Receiver<()> {
+    let (ctrlc_send, ctrlc_oneshot) = tokio::sync::oneshot::channel();
+    let ctrlc_send_c = std::cell::RefCell::new(Some(ctrlc_send));
+    ctrlc::set_handler(move || {
+        if let Some(ctrlc_send) = ctrlc_send_c.try_borrow_mut().unwrap().take() {
+            ctrlc_send.send(()).expect("Error sending ctrl-c message");
+        }
+    })
+    .unwrap();
+
+    ctrlc_oneshot
 }
 
 #[derive(Debug, Serialize)]
@@ -257,8 +295,25 @@ impl AggregateCSV {
     }
 }
 
-fn write_csv<S: Serialize + std::fmt::Debug>(writer: &mut Writer<File>, data: S) {
-    dbg!(&data);
+fn write_csv<S: Serialize>(writer: &mut Writer<File>, data: S) {
     writer.serialize(data).unwrap();
     writer.flush().unwrap();
+}
+
+pub fn persist_dht(enrs: Vec<Enr>) {
+    let bytes = rlp::encode_list(&enrs);
+    let mut file = std::fs::File::create(DHT_FILE_NAME).unwrap();
+    file.write_all(&bytes).unwrap();
+}
+
+pub fn load_dht() -> Result<Vec<Enr>, String> {
+    let mut file = std::fs::File::open(DHT_FILE_NAME).map_err(|e| format!("No such file {}", e))?;
+    let mut buf = vec![];
+    file.read_to_end(&mut buf)
+        .map_err(|e| format!("Cant read {}", e))?;
+    let rlp = rlp::Rlp::new(buf.as_slice());
+    let enrs: Vec<Enr> = rlp
+        .as_list()
+        .map_err(|e| format!("Cant decode rlp {}", e))?;
+    Ok(enrs)
 }
