@@ -118,7 +118,7 @@ async fn main() {
     ];
     let bootnodes: Vec<Enr> = enr_strs.iter().map(|e| e.parse().unwrap()).collect();
     let config = build_config(9000, bootnodes);
-    let log = build_log(slog::Level::Info, true);
+    let log = build_log(slog::Level::Debug, true);
     let (_signal, exit) = exit_future::signal();
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
     let executor = environment::TaskExecutor::new(
@@ -131,6 +131,7 @@ async fn main() {
     let mut enr_fork_id = EnrForkId::default();
     enr_fork_id.fork_digest = [231, 167, 93, 90];
     enr_fork_id.next_fork_version = [0, 0, 0, 1];
+    enr_fork_id.next_fork_epoch = Epoch::max_value();
 
     let (globals, mut libp2p_service): (_, LibP2PService<E>) =
         LibP2PService::new(executor, &config, enr_fork_id, &log)
