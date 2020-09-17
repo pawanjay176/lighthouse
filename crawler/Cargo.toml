@@ -1,0 +1,31 @@
+[package]
+name = "crawler"
+version = "0.1.0"
+authors = ["pawan <pawandhananjay@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eth2_libp2p = {path = "../beacon_node/eth2_libp2p"}
+environment = { path = "../lighthouse/environment" }
+types = { path =  "../consensus/types" }
+slog = { version = "2.5.2", features = ["max_level_trace"] }
+slog-stdlog = "4.0.0"
+slog-term = "2.5.0"
+slog-async = "2.5.0"
+tempdir = "0.3.7"
+exit-future = "0.2.0"
+serde = { version = "1.0.110", features = ["derive"] }
+tokio = { version = "0.2.21", features = ["time", "macros"] }
+futures = "0.3.5"
+sha2 = "0.9.1"
+base64 = "0.12.1"
+
+
+[dependencies.libp2p]
+#version = "0.23.0"
+git = "https://github.com/sigp/rust-libp2p"
+rev = "03f998022ce2f566a6c6e6c4206bc0ce4d45109f"
+default-features = false
+features = ["websocket", "identify", "mplex", "noise", "gossipsub", "dns", "tcp-tokio"]
