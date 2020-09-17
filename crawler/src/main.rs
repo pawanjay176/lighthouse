@@ -3,12 +3,13 @@ use eth2_libp2p::types::GossipKind;
 use eth2_libp2p::Enr;
 use eth2_libp2p::PubsubMessage;
 use eth2_libp2p::Service as LibP2PService;
-use eth2_libp2p::{BehaviourEvent, Libp2pEvent, NetworkConfig};
+use eth2_libp2p::{BehaviourEvent, Libp2pEvent, NetworkConfig, NetworkGlobals};
 use libp2p::gossipsub::{GossipsubConfigBuilder, GossipsubMessage, MessageId, ValidationMode};
 use libp2p::PeerId;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use slog::{info, o, Drain};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -66,7 +67,7 @@ pub fn build_config(port: u16, mut boot_nodes: Vec<Enr>) -> NetworkConfig {
         .fanout_ttl(Duration::from_secs(60))
         .history_length(6)
         .history_gossip(3)
-        // .validate_messages() // require validation before propagation
+        .validate_messages() // require validation before propagation
         .validation_mode(ValidationMode::Permissive)
         // prevent duplicates for 550 heartbeats(700millis * 550) = 385 secs
         .duplicate_cache_time(Duration::from_secs(385))
@@ -155,6 +156,7 @@ async fn main() {
     }
 
     let mut rx = block_until_ctrl_c();
+    let mut clients = HashMap::new();
 
     let fut = async {
         loop {
@@ -167,18 +169,36 @@ async fn main() {
                 libp2p_event = libp2p_service.next_event() => {
                     match libp2p_event {
                     Libp2pEvent::Behaviour(BehaviourEvent::PubsubMessage {
-                        source, message, ..
-                    }) => match message {
+                        source, message, message_source,..
+                    }) => {
+                        let source_client = get_client(&source, globals.clone(), &mut clients);
+                        let message_client = if let Some(ms) = &message_source {
+                            get_client(&ms,globals.clone(), &mut clients)
+                        }
+                        else {
+                            None
+                        };
+                        match message {
                         PubsubMessage::Attestation(msg) => write_csv(
                             &mut wtr_attestation,
-                            AttestationCSV::new(msg.1, source, None),
+                            AttestationCSV::new(msg.1,  source, message_source,source_client, message_client),
                         ),
                         PubsubMessage::AggregateAndProofAttestation(msg) => {
-                            write_csv(&mut wtr_aggregate, AggregateCSV::new(*msg, source, None))
+                            write_csv(&mut wtr_aggregate, AggregateCSV::new(*msg, source, message_source, source_client, message_client))
                         }
+
                         _ => {}
+                    }
                     },
                     Libp2pEvent::Behaviour(BehaviourEvent::PeerConnected(peer_id)) => {
+                        info!(
+                            log,
+                            "Connected to peer";
+                            "peer_id" => %peer_id,
+                            "peer_count" => globals.connected_peers()
+                        );
+                    }
+                    Libp2pEvent::Behaviour(BehaviourEvent::PeerDialed(peer_id)) => {
                         info!(
                             log,
                             "Connected to peer";
@@ -203,6 +223,21 @@ async fn main() {
     fut.await;
 }
 
+fn get_client(
+    peer_id: &PeerId,
+    globals: std::sync::Arc<NetworkGlobals<E>>,
+    local_db: &mut HashMap<PeerId, String>,
+) -> Option<String> {
+    if let Some(client) = local_db.get(peer_id) {
+        return Some(client.clone());
+    } else if let Some(info) = globals.peers.read().peer_info(peer_id) {
+        local_db.insert(peer_id.clone(), info.client.kind.to_string());
+        return Some(info.client.kind.to_string());
+    } else {
+        None
+    }
+}
+
 /// Block the current thread until Ctrl+C is received.
 pub fn block_until_ctrl_c() -> tokio::sync::oneshot::Receiver<()> {
     let (ctrlc_send, ctrlc_oneshot) = tokio::sync::oneshot::channel();
@@ -220,8 +255,10 @@ pub fn block_until_ctrl_c() -> tokio::sync::oneshot::Receiver<()> {
 #[derive(Debug, Serialize)]
 struct AttestationCSV {
     timestamp: i64,
-    source: String,
-    client_type: Option<String>,
+    propagation_source: String,
+    message_source: Option<String>,
+    propagation_client: Option<String>,
+    message_client: Option<String>,
     aggregation_bits: String,
     slot: Slot,
     index: u64,
@@ -234,12 +271,20 @@ struct AttestationCSV {
 }
 
 impl AttestationCSV {
-    pub fn new(data: Attestation<E>, source: PeerId, client_type: Option<String>) -> Self {
+    pub fn new(
+        data: Attestation<E>,
+        propagation_source: PeerId,
+        message_source: Option<PeerId>,
+        propagation_client: Option<String>,
+        message_client: Option<String>,
+    ) -> Self {
         let timestamp = chrono::prelude::Utc::now().timestamp_millis();
         Self {
             timestamp,
-            source: source.to_string(),
-            client_type,
+            propagation_source: propagation_source.to_string(),
+            message_source: message_source.map(|p| p.to_string()),
+            propagation_client,
+            message_client,
             aggregation_bits: hex::encode(data.aggregation_bits.into_bytes()),
             slot: data.data.slot,
             index: data.data.index,
@@ -256,8 +301,10 @@ impl AttestationCSV {
 #[derive(Debug, Serialize)]
 struct AggregateCSV {
     timestamp: i64,
-    source: String,
-    client_type: Option<String>,
+    propagation_source: String,
+    message_source: Option<String>,
+    propagation_client: Option<String>,
+    message_client: Option<String>,
     aggregation_bits: String,
     aggregator_index: u64,
     slot: Slot,
@@ -273,14 +320,18 @@ struct AggregateCSV {
 impl AggregateCSV {
     pub fn new(
         data: SignedAggregateAndProof<E>,
-        source: PeerId,
-        client_type: Option<String>,
+        propagation_source: PeerId,
+        message_source: Option<PeerId>,
+        propagation_client: Option<String>,
+        message_client: Option<String>,
     ) -> Self {
         let timestamp = chrono::prelude::Utc::now().timestamp_millis();
         Self {
             timestamp,
-            source: source.to_string(),
-            client_type,
+            propagation_source: propagation_source.to_string(),
+            message_source: message_source.map(|p| p.to_string()),
+            propagation_client,
+            message_client,
             aggregation_bits: hex::encode(data.message.aggregate.aggregation_bits.into_bytes()),
             aggregator_index: data.message.aggregator_index,
             slot: data.message.aggregate.data.slot,

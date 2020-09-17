@@ -484,6 +484,7 @@ impl<TSpec: EthSpec> Behaviour<TSpec> {
                         self.add_event(BehaviourEvent::PubsubMessage {
                             id,
                             source: propagation_source,
+                            message_source: gs_msg.source,
                             topics: gs_msg.topics,
                             message: msg,
                         });
@@ -1096,6 +1097,8 @@ pub enum BehaviourEvent<TSpec: EthSpec> {
         id: MessageId,
         /// The peer from which we received this message, not the peer that published it.
         source: PeerId,
+        /// The peer that published the message.
+        message_source: Option<PeerId>,
         /// The topics that this message was sent on.
         topics: Vec<TopicHash>,
         /// The message itself.
