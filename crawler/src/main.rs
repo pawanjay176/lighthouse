@@ -26,6 +26,7 @@ const ATTESTATIONS_FILE_NAME: &str = "attestations.csv";
 pub const GOSSIP_MAX_SIZE: usize = 1_048_576;
 type E = MainnetEthSpec;
 
+/// Build logger
 pub fn build_log(level: slog::Level, enabled: bool) -> slog::Logger {
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
@@ -38,6 +39,7 @@ pub fn build_log(level: slog::Level, enabled: bool) -> slog::Logger {
     }
 }
 
+/// Build the network config
 pub fn build_config(port: u16, mut boot_nodes: Vec<Enr>) -> NetworkConfig {
     let path = TempDir::new("libp2p_crawler").unwrap();
     let mut config = NetworkConfig::default();
@@ -60,16 +62,15 @@ pub fn build_config(port: u16, mut boot_nodes: Vec<Enr>) -> NetworkConfig {
     let gs_config = GossipsubConfigBuilder::new()
         .max_transmit_size(GOSSIP_MAX_SIZE)
         .heartbeat_interval(Duration::from_millis(700))
-        .mesh_n(48)
-        .mesh_n_low(32)
-        .mesh_n_high(64)
-        .gossip_lazy(32)
+        .mesh_n(48) // increased
+        .mesh_n_low(32) // increased
+        .mesh_n_high(64) // increased
+        .gossip_lazy(32) // increased
         .fanout_ttl(Duration::from_secs(60))
         .history_length(6)
         .history_gossip(3)
-        .validate_messages() // require validation before propagation
+        .validate_messages() // don't automatically forward
         .validation_mode(ValidationMode::Permissive)
-        // prevent duplicates for 550 heartbeats(700millis * 550) = 385 secs
         .duplicate_cache_time(Duration::from_secs(385))
         .message_id_fn(gossip_message_id)
         .build()
@@ -77,7 +78,7 @@ pub fn build_config(port: u16, mut boot_nodes: Vec<Enr>) -> NetworkConfig {
 
     config.gs_config = gs_config;
 
-    // The default topics that we will initially subscribe to
+    // Subscribe to all attestation and aggregate topics
     let mut topics = vec![GossipKind::BeaconAggregateAndProof];
     // Subscribe to all attestation subnets
     let subnet_topics: Vec<GossipKind> =
@@ -118,7 +119,9 @@ async fn main() {
     ];
     let bootnodes: Vec<Enr> = enr_strs.iter().map(|e| e.parse().unwrap()).collect();
     let config = build_config(9000, bootnodes);
-    let log = build_log(slog::Level::Debug, true);
+    let log = build_log(slog::Level::Info, true);
+
+    // Tokio stuff
     let (_signal, exit) = exit_future::signal();
     let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
     let executor = environment::TaskExecutor::new(
@@ -128,11 +131,13 @@ async fn main() {
         shutdown_tx,
     );
     // let fork_digest = "0xe7a75d5a";
+    // Set enr_fork_id to be the medalla fork id
     let mut enr_fork_id = EnrForkId::default();
     enr_fork_id.fork_digest = [231, 167, 93, 90];
     enr_fork_id.next_fork_version = [0, 0, 0, 1];
     enr_fork_id.next_fork_epoch = Epoch::max_value();
 
+    // Create a libp2p service
     let (globals, mut libp2p_service): (_, LibP2PService<E>) =
         LibP2PService::new(executor, &config, enr_fork_id, &log)
             .await
@@ -142,14 +147,15 @@ async fn main() {
     let mut wtr_attestation = csv::Writer::from_path(ATTESTATIONS_FILE_NAME).unwrap();
     let mut wtr_aggregate = csv::Writer::from_path(AGGREGATES_FILE_NAME).unwrap();
 
-    // Advertise all enr subnets as listening
+    // Advertise all enr subnets as listening so peers send us their attestations
+    // Note: we are being bad agents by not forwarding these messages on the network.
     for subnet_id in 0..64 {
         libp2p_service
             .swarm
             .update_enr_subnet(SubnetId::new(subnet_id), true);
     }
 
-    // Add persisted enrs back to the dht
+    // Add saved enrs from DHT_FILE_NAME back into the dht.
     let enrs = load_dht().unwrap_or(vec![]);
     info!(log, "Loading dht"; "num" => enrs.len());
     for enr in enrs {
@@ -157,11 +163,14 @@ async fn main() {
     }
 
     let mut rx = block_until_ctrl_c();
+
+    // Hashmap from peer id to client name
     let mut clients = HashMap::new();
 
     let fut = async {
         loop {
             tokio::select! {
+                // Persist dht if we receive an exit signal
                 _ = (&mut rx) => {
                     info!(log, "Persisting dht");
                     persist_dht(libp2p_service.swarm.enr_entries());
@@ -170,8 +179,12 @@ async fn main() {
                 libp2p_event = libp2p_service.next_event() => {
                     match libp2p_event {
                     Libp2pEvent::Behaviour(BehaviourEvent::PubsubMessage {
-                        source, message, message_source,..
+                        source, // peer who sent us this message on gs
+                        message, // decoded message
+                        message_source, // original publisher of message (note: Lighthouse nodes don't fill this info)
+                        ..
                     }) => {
+
                         let source_client = get_client(&source, globals.clone(), &mut clients);
                         let message_client = if let Some(ms) = &message_source {
                             get_client(&ms,globals.clone(), &mut clients)
@@ -191,6 +204,7 @@ async fn main() {
                         _ => {}
                     }
                     },
+                    // Log when peer is connected/disconnected
                     Libp2pEvent::Behaviour(BehaviourEvent::PeerConnected(peer_id)) => {
                         info!(
                             log,
@@ -224,6 +238,7 @@ async fn main() {
     fut.await;
 }
 
+/// Returns the client name for the given peer id if it exists
 fn get_client(
     peer_id: &PeerId,
     globals: std::sync::Arc<NetworkGlobals<E>>,
@@ -253,14 +268,23 @@ pub fn block_until_ctrl_c() -> tokio::sync::oneshot::Receiver<()> {
     ctrlc_oneshot
 }
 
+/// Unpacked attestation struct with extra params
 #[derive(Debug, Serialize)]
 struct AttestationCSV {
+    /// utc timestamp at which we received message
     timestamp: i64,
+    /// peer_id of peer who sent us this message
     propagation_source: String,
+    /// peer_id of peer who originally published the message (if present)
     message_source: Option<String>,
+    /// Client name of propagation source
     propagation_client: Option<String>,
+    /// Client name of message source
     message_client: Option<String>,
+    /// Hex encoded aggregation bits string
+    /// TODO: store this as Vec<bool> to avoid data cleaning
     aggregation_bits: String,
+    /// unpacked attestation fields
     slot: Slot,
     index: u64,
     beacon_block_root: Hash256,
@@ -301,13 +325,22 @@ impl AttestationCSV {
 
 #[derive(Debug, Serialize)]
 struct AggregateCSV {
+    /// utc timestamp at which we received message
     timestamp: i64,
+    /// peer_id of peer who sent us this message
     propagation_source: String,
+    /// peer_id of peer who originally published the message (if present)
     message_source: Option<String>,
+    /// Client name of propagation source
     propagation_client: Option<String>,
+    /// Client name of message source
     message_client: Option<String>,
+    /// Hex encoded aggregation bits string
+    /// TODO: store this as Vec<bool> to avoid data cleaning
     aggregation_bits: String,
+    /// Validator index of aggregator
     aggregator_index: u64,
+    /// Unpacked aggregation fields
     slot: Slot,
     index: u64,
     beacon_block_root: Hash256,
@@ -347,17 +380,20 @@ impl AggregateCSV {
     }
 }
 
+/// Write data into csv writer
 fn write_csv<S: Serialize>(writer: &mut Writer<File>, data: S) {
     writer.serialize(data).unwrap();
     writer.flush().unwrap();
 }
 
+/// Persist dht across restarts
 pub fn persist_dht(enrs: Vec<Enr>) {
     let bytes = rlp::encode_list(&enrs);
     let mut file = std::fs::File::create(DHT_FILE_NAME).unwrap();
     file.write_all(&bytes).unwrap();
 }
 
+/// Load persisted dht
 pub fn load_dht() -> Result<Vec<Enr>, String> {
     let mut file = std::fs::File::open(DHT_FILE_NAME).map_err(|e| format!("No such file {}", e))?;
     let mut buf = vec![];
