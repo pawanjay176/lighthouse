@@ -103,10 +103,11 @@ async fn test_status_rpc() {
 
 #[tokio::test]
 // Tests a streamed BlocksByRange RPC Message
-async fn test_blocks_by_range_chunked_rpc() {
+async fn test_blocks_by_range_chunked_rpc1() {
+    env_logger::init();
     // set up the logging. The level and enabled logging or not
-    let log_level = Level::Trace;
-    let enable_logging = false;
+    let log_level = Level::Debug;
+    let enable_logging = true;
 
     let messages_to_send = 10;
 
@@ -214,9 +215,10 @@ async fn test_blocks_by_range_chunked_rpc() {
 #[tokio::test]
 // Tests that a streamed BlocksByRange RPC Message terminates when all expected chunks were received
 async fn test_blocks_by_range_chunked_rpc_terminates_correctly() {
+    env_logger::init();
     // set up the logging. The level and enabled logging or not
     let log_level = Level::Debug;
-    let enable_logging = false;
+    let enable_logging = true;
 
     let messages_to_send = 10;
     let extra_messages_to_send = 10;

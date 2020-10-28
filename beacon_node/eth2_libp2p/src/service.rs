@@ -335,6 +335,7 @@ fn build_transport(local_private_key: Keypair) -> std::io::Result<Boxed<(PeerId,
         .upgrade(core::upgrade::Version::V1)
         .authenticate(generate_noise_config(&local_private_key))
         .multiplex(libp2p::mplex::MplexConfig::new())
+        // .multiplex(libp2p::yamux::Config::default())
         .timeout(Duration::from_secs(10))
         .boxed())
 }
