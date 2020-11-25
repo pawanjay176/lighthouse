@@ -134,7 +134,9 @@ impl SlashingDatabase {
 
     // TODO: add support for Windows ACLs
     #[cfg(windows)]
-    fn set_db_file_permissions(file: &File) -> Result<(), NotSafe> {}
+    fn set_db_file_permissions(_file: &File) -> Result<(), NotSafe> {
+        Ok(())
+    }
 
     /// Creates an empty transaction and drops it. Used to test whether the database is locked.
     pub fn test_transaction(&self) -> Result<(), NotSafe> {

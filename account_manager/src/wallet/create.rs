@@ -13,6 +13,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -244,16 +245,21 @@ pub fn create_with_600_perms<P: AsRef<Path>>(path: P, bytes: &[u8]) -> Result<()
 
     let mut file =
         File::create(&path).map_err(|e| format!("Unable to create {:?}: {}", path, e))?;
+    
+    #[cfg(unix)]    
+    {
+        let mut perm = file
+            .metadata()
+            .map_err(|e| format!("Unable to get {:?} metadata: {}", path, e))?
+            .permissions();
 
-    let mut perm = file
-        .metadata()
-        .map_err(|e| format!("Unable to get {:?} metadata: {}", path, e))?
-        .permissions();
 
-    perm.set_mode(0o600);
+        perm.set_mode(0o600);
 
-    file.set_permissions(perm)
-        .map_err(|e| format!("Unable to set {:?} permissions: {}", path, e))?;
+        file.set_permissions(perm)
+            .map_err(|e| format!("Unable to set {:?} permissions: {}", path, e))?;
+    }
+    
 
     file.write_all(bytes)
         .map_err(|e| format!("Unable to write to {:?}: {}", path, e))?;

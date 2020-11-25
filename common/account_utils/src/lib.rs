@@ -11,6 +11,7 @@ use serde_derive::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io;
 use std::io::prelude::*;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
@@ -65,11 +66,15 @@ pub fn create_with_600_perms<P: AsRef<Path>>(path: P, bytes: &[u8]) -> Result<()
 
     let mut file = File::create(&path)?;
 
-    let mut perm = file.metadata()?.permissions();
+    #[cfg(unix)]
+    {
+        let mut perm = file.metadata()?.permissions();
 
-    perm.set_mode(0o600);
+        perm.set_mode(0o600);
 
-    file.set_permissions(perm)?;
+        file.set_permissions(perm)?;
+    }
+    
 
     file.write_all(bytes)?;
 

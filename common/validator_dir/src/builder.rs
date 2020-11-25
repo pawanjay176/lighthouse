@@ -5,6 +5,7 @@ use eth2_keystore::{Error as KeystoreError, Keystore, KeystoreBuilder, PlainText
 use rand::{distributions::Alphanumeric, Rng};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use types::{ChainSpec, DepositData, Hash256, Keypair, Signature};
@@ -285,16 +286,20 @@ pub fn write_password_to_file<P: AsRef<Path>>(path: P, bytes: &[u8]) -> Result<(
 
     let mut file = File::create(&path).map_err(Error::UnableToSavePassword)?;
 
-    let mut perm = file
+    #[cfg(unix)]
+    {
+        let mut perm = file
         .metadata()
         .map_err(Error::UnableToSavePassword)?
         .permissions();
 
-    perm.set_mode(0o600);
+        perm.set_mode(0o600);
 
-    file.set_permissions(perm)
-        .map_err(Error::UnableToSavePassword)?;
+        file.set_permissions(perm)
+            .map_err(Error::UnableToSavePassword)?;
 
+    }
+    
     file.write_all(bytes).map_err(Error::UnableToSavePassword)?;
 
     Ok(())
