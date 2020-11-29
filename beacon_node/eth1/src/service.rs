@@ -34,7 +34,7 @@ const BLOCK_NUMBER_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
 /// Timeout when doing an eth_getBlockByNumber call.
 const GET_BLOCK_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
 /// Timeout when doing an eth_getLogs to read the deposit contract logs.
-const GET_DEPOSIT_LOG_TIMEOUT_MILLIS: u64 = STANDARD_TIMEOUT_MILLIS;
+const GET_DEPOSIT_LOG_TIMEOUT_MILLIS: u64 = 60_000;
 
 const WARNING_MSG: &str = "BLOCK PROPOSALS WILL FAIL WITHOUT VALID, SYNCED ETH1 CONNECTION";
 
@@ -139,7 +139,8 @@ async fn endpoint_state(
     let error_connecting = |_| {
         warn!(
             log,
-            "Error connecting to eth1 node. Trying fallback ...";
+            "Error connecting to eth1 node";
+            "action" => "Trying fallback",
             "endpoint" => endpoint,
         );
         EndpointError::NotReachable
@@ -384,7 +385,7 @@ impl Default for Config {
             block_cache_truncation: Some(4_096),
             auto_update_interval_millis: 7_000,
             blocks_per_log_query: 1_000,
-            max_log_requests_per_update: None,
+            max_log_requests_per_update: Some(100),
             max_blocks_per_update: Some(8_192),
         }
     }
@@ -816,6 +817,13 @@ impl Service {
         } else {
             Vec::new()
         };
+
+        debug!(
+            self.log,
+            "Downloading eth1 logs";
+            "from_block" => ?block_number_chunks.first().map(|r| r.start),
+            "to_block" => ?block_number_chunks.last().map(|r| r.end),
+        );
 
         let deposit_contract_address_ref: &str = &deposit_contract_address;
         let logs: Vec<(Range<u64>, Vec<Log>)> =
