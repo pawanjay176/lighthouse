@@ -30,7 +30,7 @@ pub struct Config {
     pub network_dir: PathBuf,
 
     /// IP address to listen on.
-    pub listen_address: std::net::IpAddr,
+    pub listen_address: std::net::Ipv4Addr,
 
     /// The TCP port that libp2p listens on.
     pub libp2p_port: u16,

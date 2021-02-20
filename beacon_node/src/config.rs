@@ -542,7 +542,7 @@ pub fn set_network_config(
         if config.listen_address == "0.0.0.0".parse::<IpAddr>().expect("valid ip addr") {
             config.enr_address = Some("127.0.0.1".parse::<IpAddr>().expect("valid ip addr"));
         } else {
-            config.enr_address = Some(config.listen_address);
+            config.enr_address = Some(IpAddr::V4(config.listen_address));
         }
         config.enr_udp_port = Some(config.discovery_port);
     }

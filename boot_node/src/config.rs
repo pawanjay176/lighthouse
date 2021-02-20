@@ -8,7 +8,7 @@ use eth2_libp2p::{
 use ssz::Encode;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use types::EthSpec;
 
 /// A set of configuration parameters for the bootnode, established from CLI arguments.
@@ -118,8 +118,10 @@ impl<T: EthSpec> TryFrom<&ArgMatches<'_>> for BootNodeConfig<T> {
         let auto_update = matches.is_present("enable-enr_auto_update");
 
         // the address to listen on
-        let listen_socket =
-            SocketAddr::new(network_config.listen_address, network_config.discovery_port);
+        let listen_socket = SocketAddr::new(
+            IpAddr::V4(network_config.listen_address),
+            network_config.discovery_port,
+        );
 
         Ok(BootNodeConfig {
             listen_socket,

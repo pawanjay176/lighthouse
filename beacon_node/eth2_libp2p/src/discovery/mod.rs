@@ -180,7 +180,8 @@ impl<TSpec: EthSpec> Discovery<TSpec> {
 
         info!(log, "ENR Initialised"; "enr" => local_enr.to_base64(), "seq" => local_enr.seq(), "id"=> %local_enr.node_id(), "ip" => ?local_enr.ip(), "udp"=> ?local_enr.udp(), "tcp" => ?local_enr.tcp());
 
-        let listen_socket = SocketAddr::new(config.listen_address, config.discovery_port);
+        let listen_socket =
+            SocketAddr::new(IpAddr::V4(config.listen_address), config.discovery_port);
 
         // convert the keypair into an ENR key
         let enr_key: CombinedKey = CombinedKey::from_libp2p(&local_key)?;
