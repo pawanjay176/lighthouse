@@ -48,3 +48,4 @@ lazy_static = "1.4.0"
 tempfile = "3.1.0"
 validator_dir = { path = "../common/validator_dir" }
 slashing_protection = { path = "../validator_client/slashing_protection" }
+http_api = { path = "beacon/http_api" }
