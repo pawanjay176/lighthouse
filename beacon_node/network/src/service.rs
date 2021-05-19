@@ -1,7 +1,7 @@
 use crate::persisted_dht::{load_dht, persist_dht};
 use crate::router::{Router, RouterMessage};
 use crate::{
-    attestation_service::{AttServiceMessage, AttestationService},
+    attestation_service::{AttestationService, SubnetServiceMessage},
     NetworkConfig,
 };
 use crate::{error, metrics};
@@ -472,29 +472,29 @@ fn spawn_service<T: BeaconChainTypes>(
                 // process any attestation service events
                 Some(attestation_service_message) = service.attestation_service.next() => {
                     match attestation_service_message {
-                        AttServiceMessage::Subscribe(subnet_id) => {
+                        SubnetServiceMessage::Subscribe(subnet_id) => {
                             let subnet = Subnet::Attestation(subnet_id);
                             for fork_digest in service.required_gossip_fork_digests() {
                                 let topic = GossipTopic::new(subnet.into(), GossipEncoding::default(), fork_digest);
                                 service.libp2p.swarm.subscribe(topic);
                             }
                         }
-                        AttServiceMessage::Unsubscribe(subnet_id) => {
+                        SubnetServiceMessage::Unsubscribe(subnet_id) => {
                             let subnet = Subnet::Attestation(subnet_id);
                             for fork_digest in service.required_gossip_fork_digests() {
                                 let topic = GossipTopic::new(subnet.into(), GossipEncoding::default(), fork_digest);
                                 service.libp2p.swarm.unsubscribe(topic);
                             }
                         }
-                        AttServiceMessage::EnrAdd(subnet_id) => {
+                        SubnetServiceMessage::EnrAdd(subnet_id) => {
                             let subnet = Subnet::Attestation(subnet_id);
                             service.libp2p.swarm.update_enr_subnet(subnet, true);
                         }
-                        AttServiceMessage::EnrRemove(subnet_id) => {
+                        SubnetServiceMessage::EnrRemove(subnet_id) => {
                             let subnet = Subnet::Attestation(subnet_id);
                             service.libp2p.swarm.update_enr_subnet(subnet, false);
                         }
-                        AttServiceMessage::DiscoverPeers(subnets_to_discover) => {
+                        SubnetServiceMessage::DiscoverPeers(subnets_to_discover) => {
                             service.libp2p.swarm.discover_subnet_peers(subnets_to_discover);
                         }
                     }

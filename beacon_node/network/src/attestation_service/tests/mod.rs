@@ -2,18 +2,21 @@ use super::*;
 use beacon_chain::{
     builder::{BeaconChainBuilder, Witness},
     eth1_chain::CachingEth1Backend,
+    BeaconChain,
 };
-use futures::Stream;
+use eth2_libp2p::NetworkConfig;
+use futures::prelude::*;
 use genesis::{generate_deterministic_keypairs, interop_genesis_state};
 use lazy_static::lazy_static;
 use matches::assert_matches;
 use slog::Logger;
 use sloggers::{null::NullLoggerBuilder, Build};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use store::config::StoreConfig;
 use store::{HotColdDB, MemoryStore};
-use types::{CommitteeIndex, EthSpec, MinimalEthSpec};
+use types::{CommitteeIndex, EthSpec, MinimalEthSpec, ValidatorSubscription};
 
 const SLOT_DURATION_MILLIS: u64 = 400;
 
@@ -126,11 +129,11 @@ fn get_subscriptions(
 
 // gets a number of events from the subscription service, or returns none if it times out after a number
 // of slots
-async fn get_events<S: Stream<Item = AttServiceMessage> + Unpin>(
+async fn get_events<S: Stream<Item = SubnetServiceMessage> + Unpin>(
     stream: &mut S,
     num_events: Option<usize>,
     num_slots_before_timeout: u32,
-) -> Vec<AttServiceMessage> {
+) -> Vec<SubnetServiceMessage> {
     let mut events = Vec::new();
 
     let collect_stream_fut = async {
@@ -192,8 +195,8 @@ async fn subscribe_current_slot_wait_for_unsubscribe() {
     )
     .unwrap();
     let expected = vec![
-        AttServiceMessage::Subscribe(subnet_id),
-        AttServiceMessage::Unsubscribe(subnet_id),
+        SubnetServiceMessage::Subscribe(subnet_id),
+        SubnetServiceMessage::Unsubscribe(subnet_id),
     ];
 
     // Wait for 1 slot duration to get the unsubscription event
@@ -201,9 +204,9 @@ async fn subscribe_current_slot_wait_for_unsubscribe() {
     assert_matches!(
         events[..3],
         [
-            AttServiceMessage::DiscoverPeers(_),
-            AttServiceMessage::Subscribe(_any1),
-            AttServiceMessage::EnrAdd(_any3)
+            SubnetServiceMessage::DiscoverPeers(_),
+            SubnetServiceMessage::Subscribe(_any1),
+            SubnetServiceMessage::EnrAdd(_any3)
         ]
     );
 
@@ -283,13 +286,13 @@ async fn test_same_subnet_unsubscription() {
     assert_matches!(
         events[..3],
         [
-            AttServiceMessage::DiscoverPeers(_),
-            AttServiceMessage::Subscribe(_any1),
-            AttServiceMessage::EnrAdd(_any3)
+            SubnetServiceMessage::DiscoverPeers(_),
+            SubnetServiceMessage::Subscribe(_any1),
+            SubnetServiceMessage::EnrAdd(_any3)
         ]
     );
 
-    let expected = AttServiceMessage::Subscribe(subnet_id1);
+    let expected = SubnetServiceMessage::Subscribe(subnet_id1);
 
     // Should be still subscribed to 1 long lived and 1 short lived subnet if both are different.
     if !attestation_service.random_subnets.contains(&subnet_id1) {
@@ -305,7 +308,7 @@ async fn test_same_subnet_unsubscription() {
     // If the long lived and short lived subnets are different, we should get an unsubscription event.
     if !attestation_service.random_subnets.contains(&subnet_id1) {
         assert_eq!(
-            [AttServiceMessage::Unsubscribe(subnet_id1)],
+            [SubnetServiceMessage::Unsubscribe(subnet_id1)],
             unsubscribe_event[..]
         );
     }
@@ -347,16 +350,16 @@ async fn subscribe_all_random_subnets() {
 
     for event in &events {
         match event {
-            AttServiceMessage::DiscoverPeers(_) => discover_peer_count += 1,
-            AttServiceMessage::Subscribe(_any_subnet) => {}
-            AttServiceMessage::EnrAdd(_any_subnet) => enr_add_count += 1,
+            SubnetServiceMessage::DiscoverPeers(_) => discover_peer_count += 1,
+            SubnetServiceMessage::Subscribe(_any_subnet) => {}
+            SubnetServiceMessage::EnrAdd(_any_subnet) => enr_add_count += 1,
             _ => unexpected_msg_count += 1,
         }
     }
 
     // The bulk discovery request length should be equal to validator_count
     let bulk_discovery_event = events.last().unwrap();
-    if let AttServiceMessage::DiscoverPeers(d) = bulk_discovery_event {
+    if let SubnetServiceMessage::DiscoverPeers(d) = bulk_discovery_event {
         assert_eq!(d.len(), attestation_subnet_count as usize);
     } else {
         panic!("Unexpected event {:?}", bulk_discovery_event);
@@ -405,16 +408,16 @@ async fn subscribe_all_random_subnets_plus_one() {
 
     for event in &events {
         match event {
-            AttServiceMessage::DiscoverPeers(_) => discover_peer_count += 1,
-            AttServiceMessage::Subscribe(_any_subnet) => {}
-            AttServiceMessage::EnrAdd(_any_subnet) => enr_add_count += 1,
+            SubnetServiceMessage::DiscoverPeers(_) => discover_peer_count += 1,
+            SubnetServiceMessage::Subscribe(_any_subnet) => {}
+            SubnetServiceMessage::EnrAdd(_any_subnet) => enr_add_count += 1,
             _ => unexpected_msg_count += 1,
         }
     }
 
     // The bulk discovery request length shouldn't exceed max attestation_subnet_count
     let bulk_discovery_event = events.last().unwrap();
-    if let AttServiceMessage::DiscoverPeers(d) = bulk_discovery_event {
+    if let SubnetServiceMessage::DiscoverPeers(d) = bulk_discovery_event {
         assert_eq!(d.len(), attestation_subnet_count as usize);
     } else {
         panic!("Unexpected event {:?}", bulk_discovery_event);
