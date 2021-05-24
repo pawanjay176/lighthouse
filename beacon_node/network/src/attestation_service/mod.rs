@@ -6,7 +6,7 @@ pub mod attestation_subnets;
 pub mod sync_subnets;
 
 use eth2_libp2p::SubnetDiscovery;
-use types::{Slot, SubnetId};
+use types::SubnetId;
 
 pub use attestation_subnets::AttestationService;
 pub use sync_subnets::SyncCommitteeService;
