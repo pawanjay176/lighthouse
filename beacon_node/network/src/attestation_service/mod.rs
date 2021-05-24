@@ -3,11 +3,13 @@
 //! determines whether attestations should be aggregated and/or passed to the beacon node.
 
 pub mod attestation_subnets;
+pub mod sync_subnets;
 
 use eth2_libp2p::SubnetDiscovery;
 use types::{Slot, SubnetId};
 
 pub use attestation_subnets::AttestationService;
+pub use sync_subnets::SyncCommitteeService;
 
 #[cfg(test)]
 mod tests;
@@ -50,13 +52,4 @@ impl PartialEq for SubnetServiceMessage {
             _ => false,
         }
     }
-}
-
-/// A particular subnet at a given slot.
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct ExactSubnet {
-    /// The `SubnetId` associated with this subnet.
-    pub subnet_id: SubnetId,
-    /// The end `Slot` associated with this subnet.
-    pub slot: Slot,
 }
