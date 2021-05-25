@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::prelude::*;
 use slog::{debug, error, o, trace, warn};
@@ -12,6 +12,7 @@ use beacon_chain::{BeaconChain, BeaconChainTypes};
 use eth2_libp2p::{NetworkConfig, Subnet, SubnetDiscovery};
 use hashset_delay::HashSetDelay;
 use slot_clock::SlotClock;
+use tokio::time::{interval, Interval};
 use types::{Epoch, EthSpec, SubnetId, SyncCommitteeSubscription};
 
 use crate::metrics;
@@ -20,6 +21,9 @@ use crate::metrics;
 /// slot is less than this number, skip the peer discovery process.
 /// Subnet discovery query takes atmost 30 secs, 2 slots take 24s.
 const MIN_PEER_DISCOVERY_SLOT_LOOK_AHEAD: u64 = 2;
+
+/// Interval for running a discovery query for currently subscribed subnets in seconds.
+const DISCOVERY_INTERVAL: u64 = 1800;
 
 /// A particular subnet at a given slot.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -51,6 +55,11 @@ pub struct SyncCommitteeService<T: BeaconChainTypes> {
     /// We are always subscribed to all subnets.
     subscribe_all_subnets: bool,
 
+    /// Interval at which we re-run a discovery request for peers in subnets we are subscribed to.
+    /// This is done because sync committee periods are long (~27 hours for mainnet).
+    /// It's possible that we loose peers on required subnets due to network issues over such a long period.
+    discovery_interval: Interval,
+
     /// The logger for the attestation service.
     log: slog::Logger,
 }
@@ -79,6 +88,7 @@ impl<T: BeaconChainTypes> SyncCommitteeService<T> {
             waker: None,
             subscribe_all_subnets: config.subscribe_all_subnets,
             discovery_disabled: config.disable_discovery,
+            discovery_interval: interval(Duration::from_secs(DISCOVERY_INTERVAL)),
             log,
         }
     }
@@ -214,6 +224,11 @@ impl<T: BeaconChainTypes> SyncCommitteeService<T> {
 
     /// Adds a subscription event and an associated unsubscription event if required.
     fn subscribe_to_subnet(&mut self, exact_subnet: ExactSubnet) -> Result<(), &'static str> {
+        // Return if we already have a subscription for exact_subnet
+        if self.subscriptions.contains(&exact_subnet) || self.subscribe_all_subnets {
+            return Ok(());
+        }
+
         // initialise timing variables
         let current_slot = self
             .beacon_chain
@@ -241,11 +256,6 @@ impl<T: BeaconChainTypes> SyncCommitteeService<T> {
                 .ok_or("Unable to determine duration to unsubscription slot")?
                 + slot_duration
         };
-
-        // Return if we already have a subscription for exact_subnet
-        if self.subscriptions.contains(&exact_subnet) || self.subscribe_all_subnets {
-            return Ok(());
-        }
 
         // We are not currently subscribed and have no waiting subscription, create one
         debug!(self.log, "Subscribing to subnet"; "subnet" => *exact_subnet.subnet_id, "until_epoch" => ?exact_subnet.until_epoch);
@@ -296,6 +306,16 @@ impl<T: BeaconChainTypes> Stream for SyncCommitteeService<T> {
                 error!(self.log, "Failed to check for subnet unsubscription times"; "error"=> e);
             }
             Poll::Ready(None) | Poll::Pending => {}
+        }
+
+        // re-run discovery for sync committee subnets we are subscribed to periodically.
+        if let Poll::Ready(_) = self.discovery_interval.poll_tick(cx) {
+            if !self.discovery_disabled {
+                let subnets_to_discover = self.subscriptions.clone();
+                if let Err(e) = self.discover_peers_request(subnets_to_discover.iter()) {
+                    warn!(self.log, "Discovery lookup request error"; "error"=> e);
+                }
+            }
         }
 
         // process any generated events
