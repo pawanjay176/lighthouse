@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use store::config::StoreConfig;
 use store::{HotColdDB, MemoryStore};
-use types::{CommitteeIndex, EthSpec, MinimalEthSpec, ValidatorSubscription};
+use types::{CommitteeIndex, EthSpec, MinimalEthSpec, Slot, ValidatorSubscription};
 
 const SLOT_DURATION_MILLIS: u64 = 400;
 

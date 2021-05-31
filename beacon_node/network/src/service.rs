@@ -1,11 +1,11 @@
-use crate::attestation_service::SyncCommitteeService;
 use crate::persisted_dht::{load_dht, persist_dht};
 use crate::router::{Router, RouterMessage};
+use crate::subnet_service::SyncCommitteeService;
+use crate::{error, metrics};
 use crate::{
-    attestation_service::{AttestationService, SubnetServiceMessage},
+    subnet_service::{AttestationService, SubnetServiceMessage},
     NetworkConfig,
 };
-use crate::{error, metrics};
 use beacon_chain::{BeaconChain, BeaconChainError, BeaconChainTypes};
 use eth2_libp2p::{
     rpc::{GoodbyeReason, RPCResponseErrorCode, RequestId},
