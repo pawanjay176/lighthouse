@@ -1,3 +1,7 @@
+//! This service keeps track of which shard subnet the beacon node should be subscribed to at any
+//! given time. It schedules subscriptions to shard subnets, requests peer discoveries and
+//! determines whether attestations should be aggregated and/or passed to the beacon node.
+
 use super::SubnetServiceMessage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
