@@ -5,8 +5,8 @@ use beacon_chain::sync_committee_verification::{
     Error as SyncVerificationError, VerifiedSyncCommitteeMessage,
 };
 use beacon_chain::{
-    BeaconChain, BeaconChainError, BeaconChainTypes, StateSkipConfig,
-    MAXIMUM_GOSSIP_CLOCK_DISPARITY,
+    validator_monitor::timestamp_now, BeaconChain, BeaconChainError, BeaconChainTypes,
+    StateSkipConfig, MAXIMUM_GOSSIP_CLOCK_DISPARITY,
 };
 use eth2::types::{self as api_types};
 use eth2_libp2p::PubsubMessage;
@@ -136,6 +136,8 @@ pub fn process_sync_committee_signatures<T: BeaconChainTypes>(
 ) -> Result<(), warp::reject::Rejection> {
     let mut failures = vec![];
 
+    let seen_timestamp = timestamp_now();
+
     for (i, sync_committee_signature) in sync_committee_signatures.iter().enumerate() {
         let subnet_positions = match get_subnet_positions_for_sync_committee_message(
             sync_committee_signature,
@@ -166,6 +168,15 @@ pub fn process_sync_committee_signatures<T: BeaconChainTypes>(
                 chain,
             ) {
                 Ok(verified) => {
+                    // Register with validator monitor
+                    chain
+                        .validator_monitor
+                        .read()
+                        .register_api_sync_committee_message(
+                            seen_timestamp,
+                            &verified.sync_message(),
+                            &chain.slot_clock,
+                        );
                     publish_pubsub_message(
                         &network_tx,
                         PubsubMessage::SyncCommitteeMessage(Box::new((
@@ -237,6 +248,8 @@ pub fn process_signed_contribution_and_proofs<T: BeaconChainTypes>(
     let mut verified_contributions = Vec::with_capacity(signed_contribution_and_proofs.len());
     let mut failures = vec![];
 
+    let seen_timestamp = timestamp_now();
+
     // Verify contributions & broadcast to the network.
     for (index, contribution) in signed_contribution_and_proofs.into_iter().enumerate() {
         let aggregator_index = contribution.message.aggregator_index;
@@ -252,7 +265,17 @@ pub fn process_signed_contribution_and_proofs<T: BeaconChainTypes>(
                     )),
                 )?;
 
-                // FIXME(altair): notify validator monitor
+                // Register with validator monitor
+                chain
+                    .validator_monitor
+                    .read()
+                    .register_gossip_sync_committee_aggregate(
+                        seen_timestamp,
+                        verified_contribution.aggregate(),
+                        verified_contribution.participant_pubkeys(),
+                        &chain.slot_clock,
+                    );
+
                 verified_contributions.push((index, verified_contribution));
             }
             // If we already know the contribution, don't broadcast it or attempt to
