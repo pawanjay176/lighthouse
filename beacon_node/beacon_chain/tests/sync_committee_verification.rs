@@ -484,7 +484,8 @@ fn aggregated_gossip_verification() {
     assert_invalid!(
         "sync contribution created with incorrect sync committee",
         next_valid_contribution.clone(),
-        SyncCommitteeError::InvalidSignature
+        SyncCommitteeError::AggregatorNotInCommittee { aggregator_index }
+        if aggregator_index == next_valid_contribution.message.aggregator_index
     );
 }
 
