@@ -124,3 +124,10 @@ define_net!(
     "altair-devnet-1",
     true
 );
+
+define_net!(
+    altair_devnet_2,
+    include_altair_devnet_2_file,
+    "altair-devnet-2",
+    true
+);
