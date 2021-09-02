@@ -110,6 +110,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         seen_timestamp: Duration,
     ) {
         let beacon_block_root = attestation.data.beacon_block_root;
+        let uid = hex::encode(attestation.signature.serialize());
 
         let attestation = match self
             .chain
@@ -128,10 +129,17 @@ impl<T: BeaconChainTypes> Worker<T> {
                     },
                     reprocess_tx,
                     e,
+                    uid,
                 );
                 return;
             }
         };
+
+        info!(
+            self.log,
+            "Unaggregated attestation passed gossip verification";
+            "uid" => %uid
+        );
 
         // Register the attestation with any monitored validators.
         self.chain
@@ -184,6 +192,12 @@ impl<T: BeaconChainTypes> Worker<T> {
             )
         }
 
+        info!(
+            self.log,
+            "Unaggregated attestation added to op pool";
+            "uid" => %uid
+        );
+
         metrics::inc_counter(&metrics::BEACON_PROCESSOR_UNAGGREGATED_ATTESTATION_IMPORTED_TOTAL);
     }
 
@@ -203,6 +217,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         seen_timestamp: Duration,
     ) {
         let beacon_block_root = aggregate.message.aggregate.data.beacon_block_root;
+        let uid = hex::encode(aggregate.signature.serialize());
 
         let aggregate = match self
             .chain
@@ -220,10 +235,17 @@ impl<T: BeaconChainTypes> Worker<T> {
                     },
                     reprocess_tx,
                     e,
+                    uid,
                 );
                 return;
             }
         };
+
+        info!(
+            self.log,
+            "Aggregated attestation passed gossip verification";
+            "uid" => %uid
+        );
 
         // Indicate to the `Network` service that this message is valid and can be
         // propagated on the gossip network.
@@ -272,6 +294,12 @@ impl<T: BeaconChainTypes> Worker<T> {
                 "beacon_block_root" => ?beacon_block_root
             )
         }
+
+        info!(
+            self.log,
+            "Aggregated attestation added to inclusion pool";
+            "uid" => %uid
+        );
 
         metrics::inc_counter(&metrics::BEACON_PROCESSOR_AGGREGATED_ATTESTATION_IMPORTED_TOTAL);
     }
@@ -838,6 +866,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         failed_att: FailedAtt<T::EthSpec>,
         reprocess_tx: Option<mpsc::Sender<ReprocessQueueMessage<T>>>,
         error: AttnError,
+        uid: String,
     ) {
         let beacon_block_root = failed_att.root();
         let attestation_type = failed_att.kind();
@@ -978,7 +1007,7 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 self.propagate_validation_result(message_id, peer_id, MessageAcceptance::Ignore);
 
-                return;
+                // return;
             }
             AttnError::ValidatorIndexTooHigh(_) => {
                 /*
@@ -1016,7 +1045,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                                 "msg" => "UnknownBlockHash"
                             )
                         });
-                    let msg = match failed_att {
+                    let msg = match &failed_att {
                         FailedAtt::Aggregate {
                             attestation,
                             seen_timestamp,
@@ -1027,8 +1056,8 @@ impl<T: BeaconChainTypes> Worker<T> {
                             ReprocessQueueMessage::UnknownBlockAggregate(QueuedAggregate {
                                 peer_id,
                                 message_id,
-                                attestation,
-                                seen_timestamp,
+                                attestation: attestation.clone(),
+                                seen_timestamp: *seen_timestamp,
                             })
                         }
                         FailedAtt::Unaggregate {
@@ -1043,10 +1072,10 @@ impl<T: BeaconChainTypes> Worker<T> {
                             ReprocessQueueMessage::UnknownBlockUnaggregate(QueuedUnaggregate {
                                 peer_id,
                                 message_id,
-                                attestation,
-                                subnet_id,
-                                should_import,
-                                seen_timestamp,
+                                attestation: attestation.clone(),
+                                subnet_id: subnet_id.clone(),
+                                should_import: *should_import,
+                                seen_timestamp: *seen_timestamp,
                             })
                         }
                     };
@@ -1068,7 +1097,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                     );
                 }
 
-                return;
+                // return;
             }
             AttnError::UnknownTargetRoot(_) => {
                 /*
@@ -1207,13 +1236,14 @@ impl<T: BeaconChainTypes> Worker<T> {
             }
         }
 
-        debug!(
+        info!(
             self.log,
             "Invalid attestation from network";
             "reason" => ?error,
             "block" => ?beacon_block_root,
             "peer_id" => %peer_id,
             "type" => ?attestation_type,
+            "uid" => uid,
         );
     }
 
