@@ -217,7 +217,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         seen_timestamp: Duration,
     ) {
         let beacon_block_root = aggregate.message.aggregate.data.beacon_block_root;
-        let uid = hex::encode(aggregate.signature.serialize());
+        let uid = hex::encode(aggregate.message.aggregate.signature.serialize());
 
         let aggregate = match self
             .chain
