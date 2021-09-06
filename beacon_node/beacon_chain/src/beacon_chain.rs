@@ -64,8 +64,8 @@ use state_processing::{
 };
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::prelude::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -2214,7 +2214,17 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         // Iterate through the attestations in the block and register them as an "observed
         // attestation". This will stop us from propagating them on the gossip network.
+        let all_atts: BTreeSet<_> = self
+            .naive_aggregation_pool
+            .read()
+            .iter()
+            .chain(self.op_pool.get_all_attestations().iter())
+            .map(|a| a.signature.serialize())
+            .collect();
         for a in signed_block.message().body().attestations() {
+            if !all_atts.contains(&a.signature.serialize()) {
+                info!(self.log, "Cannot find attestation from block in cache"; "slot" => %current_slot);
+            }
             match self.observed_attestations.write().observe_item(a, None) {
                 // If the observation was successful or if the slot for the attestation was too
                 // low, continue.
