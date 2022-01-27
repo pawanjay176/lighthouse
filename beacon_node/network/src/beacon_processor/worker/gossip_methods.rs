@@ -1356,6 +1356,12 @@ impl<T: BeaconChainTypes> Worker<T> {
                 // Only penalize the peer if it would have been invalid at the moment we received
                 // it.
                 if hindsight_verification.is_err() {
+                    info!(
+                        self.log,
+                        "Attestation past slot fail";
+                        "peer_id" => %peer_id,
+                        "message_id" => ?message_id,
+                    );
                     self.gossip_penalize_peer(
                         peer_id,
                         PeerAction::LowToleranceError,
@@ -1825,12 +1831,6 @@ impl<T: BeaconChainTypes> Worker<T> {
                  *
                  * The peer has published an invalid consensus message, _only_ if we trust our own clock.
                  */
-                trace!(
-                    self.log,
-                    "Sync committee message is not within the last MAXIMUM_GOSSIP_CLOCK_DISPARITY slots";
-                    "peer_id" => %peer_id,
-                    "type" => ?message_type,
-                );
 
                 // Compute the slot when we received the message.
                 let received_slot = self
@@ -1857,6 +1857,13 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 // Penalize the peer if the message was more than one slot late
                 if excessively_late && invalid_in_hindsight() {
+                    info!(
+                        self.log,
+                        "Sync committee past slot fail";
+                        "peer_id" => %peer_id,
+                        "type" => ?message_type,
+                        "message_id" => ?message_id,
+                    );
                     self.gossip_penalize_peer(
                         peer_id,
                         PeerAction::HighToleranceError,
