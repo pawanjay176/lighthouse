@@ -43,9 +43,10 @@ open-metrics-client = "0.13.0"
 [dependencies.libp2p]
 # version = "0.41.0"
 default-features = false
-git = "https://github.com/libp2p/rust-libp2p"
+# git = "https://github.com/libp2p/rust-libp2p"
 # Latest libp2p master
-rev = "17861d9cac121f7e448585a7f052d5eab4618826"
+# rev = "17861d9cac121f7e448585a7f052d5eab4618826"
+path="/home/pawan/eth2/rust-libp2p"
 features = ["websocket", "identify", "mplex", "yamux", "noise", "gossipsub", "dns-tokio", "tcp-tokio", "plaintext"]
 
 [dev-dependencies]
