@@ -185,6 +185,9 @@ lazy_static! {
         "beacon_processor_unaggregated_attestation_verified_total",
         "Total number of unaggregated attestations verified for gossip."
     );
+
+
+
     pub static ref BEACON_PROCESSOR_UNAGGREGATED_ATTESTATION_IMPORTED_TOTAL: Result<IntCounter> = try_create_int_counter(
         "beacon_processor_unaggregated_attestation_imported_total",
         "Total number of unaggregated attestations imported to fork choice, etc."
@@ -296,6 +299,18 @@ lazy_static! {
         "beacon_block_gossip_slot_start_delay_time",
         "Duration between when the block is received and the start of the slot it belongs to.",
     );
+
+    pub static ref UNAGGREGATED_ATTESTATION_GOSSIP_SLOT_START_DELAY_TIME: Result<Histogram> = try_create_histogram(
+        "unaggregated_attestation_gossip_slot_start_delay_time",
+        "Duration between when the attestation is received and the start of the slot it belongs to.",
+    );
+
+    pub static ref AGGREGATED_ATTESTATION_GOSSIP_SLOT_START_DELAY_TIME: Result<Histogram> = try_create_histogram(
+        "aggregated_attestation_gossip_slot_start_delay_time",
+        "Duration between when the aggregate is received and the start of the slot it belongs to.",
+    );
+
+
     pub static ref BEACON_BLOCK_GOSSIP_ARRIVED_LATE_TOTAL: Result<IntCounter> = try_create_int_counter(
         "beacon_block_gossip_arrived_late_total",
         "Count of times when a gossip block arrived from the network later than the attestation deadline.",
