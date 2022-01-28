@@ -5,7 +5,7 @@ use beacon_chain::{
     attestation_verification::{self, Error as AttnError, VerifiedAttestation},
     observed_operations::ObservationOutcome,
     sync_committee_verification::{self, Error as SyncCommitteeError},
-    validator_monitor::get_block_delay_ms,
+    validator_monitor::{get_block_delay_ms, get_slot_delay_ms},
     BeaconChainError, BeaconChainTypes, BlockError, ExecutionPayloadError, ForkChoiceError,
     GossipVerifiedBlock,
 };
@@ -335,6 +335,16 @@ impl<T: BeaconChainTypes> Worker<T> {
             Ok(verified_attestation) => {
                 let indexed_attestation = &verified_attestation.indexed_attestation;
                 let beacon_block_root = indexed_attestation.data.beacon_block_root;
+                let delay = get_slot_delay_ms(
+                    seen_timestamp,
+                    indexed_attestation.data.slot,
+                    &self.chain.slot_clock,
+                );
+                // Log metrics to track delay from other nodes on the network.
+                metrics::observe_duration(
+                    &metrics::UNAGGREGATED_ATTESTATION_GOSSIP_SLOT_START_DELAY_TIME,
+                    delay,
+                );
 
                 // Register the attestation with any monitored validators.
                 self.chain
@@ -402,6 +412,18 @@ impl<T: BeaconChainTypes> Worker<T> {
                 );
             }
             Err(RejectedUnaggregate { attestation, error }) => {
+                if !matches!(error, AttnError::AttestationAlreadyKnown(_)) {
+                    let delay = get_slot_delay_ms(
+                        seen_timestamp,
+                        attestation.data.slot,
+                        &self.chain.slot_clock,
+                    );
+                    // Log metrics to track delay from other nodes on the network.
+                    metrics::observe_duration(
+                        &metrics::UNAGGREGATED_ATTESTATION_GOSSIP_SLOT_START_DELAY_TIME,
+                        delay,
+                    );
+                }
                 self.handle_attestation_verification_failure(
                     peer_id,
                     message_id,
@@ -536,6 +558,16 @@ impl<T: BeaconChainTypes> Worker<T> {
     ) {
         match result {
             Ok(verified_aggregate) => {
+                let delay = get_slot_delay_ms(
+                    seen_timestamp,
+                    verified_aggregate.indexed_attestation.data.slot,
+                    &self.chain.slot_clock,
+                );
+                // Log metrics to track delay from other nodes on the network.
+                metrics::observe_duration(
+                    &metrics::AGGREGATED_ATTESTATION_GOSSIP_SLOT_START_DELAY_TIME,
+                    delay,
+                );
                 let aggregate = &verified_aggregate.signed_aggregate;
                 let indexed_attestation = &verified_aggregate.indexed_attestation;
 
@@ -602,6 +634,18 @@ impl<T: BeaconChainTypes> Worker<T> {
                 signed_aggregate,
                 error,
             }) => {
+                if !matches!(error, AttnError::AttestationAlreadyKnown(_)) {
+                    let delay = get_slot_delay_ms(
+                        seen_timestamp,
+                        signed_aggregate.message.aggregate.data.slot,
+                        &self.chain.slot_clock,
+                    );
+                    // Log metrics to track delay from other nodes on the network.
+                    metrics::observe_duration(
+                        &metrics::AGGREGATED_ATTESTATION_GOSSIP_SLOT_START_DELAY_TIME,
+                        delay,
+                    );
+                }
                 // Report the failure to gossipsub
                 self.handle_attestation_verification_failure(
                     peer_id,
@@ -1312,6 +1356,12 @@ impl<T: BeaconChainTypes> Worker<T> {
                 // Only penalize the peer if it would have been invalid at the moment we received
                 // it.
                 if hindsight_verification.is_err() {
+                    info!(
+                        self.log,
+                        "Attestation past slot fail";
+                        "peer_id" => %peer_id,
+                        "message_id" => ?message_id,
+                    );
                     self.gossip_penalize_peer(
                         peer_id,
                         PeerAction::LowToleranceError,
@@ -1781,12 +1831,6 @@ impl<T: BeaconChainTypes> Worker<T> {
                  *
                  * The peer has published an invalid consensus message, _only_ if we trust our own clock.
                  */
-                trace!(
-                    self.log,
-                    "Sync committee message is not within the last MAXIMUM_GOSSIP_CLOCK_DISPARITY slots";
-                    "peer_id" => %peer_id,
-                    "type" => ?message_type,
-                );
 
                 // Compute the slot when we received the message.
                 let received_slot = self
@@ -1813,6 +1857,13 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 // Penalize the peer if the message was more than one slot late
                 if excessively_late && invalid_in_hindsight() {
+                    info!(
+                        self.log,
+                        "Sync committee past slot fail";
+                        "peer_id" => %peer_id,
+                        "type" => ?message_type,
+                        "message_id" => ?message_id,
+                    );
                     self.gossip_penalize_peer(
                         peer_id,
                         PeerAction::HighToleranceError,
