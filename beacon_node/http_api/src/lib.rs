@@ -19,7 +19,7 @@ mod version;
 use beacon_chain::{
     attestation_verification::VerifiedAttestation,
     observed_operations::ObservationOutcome,
-    validator_monitor::{get_block_delay_ms, get_slot_delay_ms, timestamp_now},
+    validator_monitor::{get_block_delay_ms, timestamp_now},
     AttestationError as AttnError, BeaconChain, BeaconChainError, BeaconChainTypes,
     HeadSafetyStatus, WhenSlotSkipped,
 };
