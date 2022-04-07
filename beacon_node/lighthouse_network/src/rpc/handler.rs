@@ -430,7 +430,10 @@ where
         match rpc_event {
             RPCSend::Request(id, req) => self.send_request(id, req),
             RPCSend::Response(inbound_id, response) => self.send_response(inbound_id, response),
-            RPCSend::Shutdown(id, reason) => self.shutdown(Some((id, reason))),
+            RPCSend::Shutdown(id, reason, peer_id) => {
+                debug!(self.log, "Handler received shutdown"; "reason" => %reason, "peer_id" => %peer_id);
+                self.shutdown(Some((id, reason)))
+            },
         }
         // In any case, we need the handler to process the event.
         if let Some(waker) = &self.waker {

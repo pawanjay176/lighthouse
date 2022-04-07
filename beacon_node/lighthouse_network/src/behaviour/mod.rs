@@ -729,7 +729,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Behaviour<AppReqId, TSpec> {
         let ping = crate::rpc::Ping {
             data: *self.network_globals.local_metadata.read().seq_number(),
         };
-        trace!(self.log, "Sending Ping"; "peer_id" => %peer_id);
+        debug!(self.log, "Sending Ping"; "peer_id" => %peer_id);
         let id = RequestId::Behaviour;
         self.eth2_rpc
             .send_request(peer_id, id, OutboundRequest::Ping(ping));
@@ -991,7 +991,8 @@ where
             debug!(
                 self.log,
                 "Ignoring rpc message of disconnecting peer";
-                "peer" => %peer_id
+                "peer" => %peer_id,
+                "event" => ?event,
             );
             return;
         }
