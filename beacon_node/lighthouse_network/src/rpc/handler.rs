@@ -7,6 +7,7 @@ use super::protocol::{max_rpc_size, InboundRequest, Protocol, RPCError, RPCProto
 use super::{RPCReceived, RPCSend, ReqId};
 use crate::rpc::outbound::{OutboundFramed, OutboundRequest};
 use crate::rpc::protocol::InboundFramed;
+use crate::PeerId;
 use fnv::FnvHashMap;
 use futures::prelude::*;
 use futures::{Sink, SinkExt};
@@ -532,7 +533,7 @@ where
         >,
     > {
         if let Some(peer_id) = self.peer_id {
-            debug!("Entered poll"; "peer_id" => %peer_id);
+            debug!(self.log, "Entered poll"; "peer_id" => %peer_id);
         }
         if let Some(waker) = &self.waker {
             if waker.will_wake(cx.waker()) {
@@ -549,7 +550,7 @@ where
         }
 
         if let Some(peer_id) = self.peer_id {
-            debug!("Entered poll, no outbound events"; "peer_id" => %peer_id);
+            debug!(self.log, "Entered poll, no outbound events"; "peer_id" => %peer_id);
         }
         // Check if we are shutting down, and if the timer ran out
         if let HandlerState::ShuttingDown(delay) = &self.state {
