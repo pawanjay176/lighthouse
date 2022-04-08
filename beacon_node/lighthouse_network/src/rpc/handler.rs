@@ -126,6 +126,8 @@ where
     /// Waker, to be sure the handler gets polled when needed.
     waker: Option<std::task::Waker>,
 
+    peer_id: Option<PeerId>,
+
     /// Logger for handling RPC streams
     log: slog::Logger,
 }
@@ -227,6 +229,7 @@ where
             outbound_io_error_retries: 0,
             fork_context,
             waker: None,
+            peer_id: None,
             log: log.clone(),
         }
     }
@@ -431,9 +434,10 @@ where
             RPCSend::Request(id, req) => self.send_request(id, req),
             RPCSend::Response(inbound_id, response) => self.send_response(inbound_id, response),
             RPCSend::Shutdown(id, reason, peer_id) => {
+                self.peer_id = Some(peer_id);
                 debug!(self.log, "Handler received shutdown"; "reason" => %reason, "peer_id" => %peer_id);
                 self.shutdown(Some((id, reason)))
-            },
+            }
         }
         // In any case, we need the handler to process the event.
         if let Some(waker) = &self.waker {
@@ -527,6 +531,9 @@ where
             Self::Error,
         >,
     > {
+        if let Some(peer_id) = self.peer_id {
+            debug!("Entered poll"; "peer_id" => %peer_id);
+        }
         if let Some(waker) = &self.waker {
             if waker.will_wake(cx.waker()) {
                 self.waker = Some(cx.waker().clone());
@@ -541,6 +548,9 @@ where
             self.events_out.shrink_to_fit();
         }
 
+        if let Some(peer_id) = self.peer_id {
+            debug!("Entered poll, no outbound events"; "peer_id" => %peer_id);
+        }
         // Check if we are shutting down, and if the timer ran out
         if let HandlerState::ShuttingDown(delay) = &self.state {
             if delay.is_elapsed() {
