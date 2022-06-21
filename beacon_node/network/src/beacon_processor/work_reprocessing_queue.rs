@@ -43,7 +43,7 @@ const ADDITIONAL_QUEUED_BLOCK_DELAY: Duration = Duration::from_millis(5);
 pub const QUEUED_ATTESTATION_DELAY: Duration = Duration::from_secs(12);
 
 /// For how long to queue rpc blocks before sending them back for reprocessing.
-pub const QUEUED_RPC_BLOCK_DELAY: Duration = Duration::from_secs(12);
+pub const QUEUED_RPC_BLOCK_DELAY: Duration = Duration::from_secs(3);
 
 /// Set an arbitrary upper-bound on the number of queued blocks to avoid DoS attacks. The fact that
 /// we signature-verify blocks before putting them in the queue *should* protect against this, but
@@ -349,9 +349,9 @@ impl<T: BeaconChainTypes> ReprocessQueue<T> {
                 }
             }
             // A rpc block arrived for processing at the same time when a gossip block
-            // for the same block hash is being imported. We wait for the block to be imported
-            // by gossip and send the block processing result to the sync process that requested the rpc
-            // block or send the block for reprocessing after the delay expires.
+            // for the same block hash is being imported. We wait for `QUEUED_RPC_BLOCK_DELAY`
+            // and then send the rpc block back for processing assuming the gossip import
+            // has completed by then.
             InboundEvent::Msg(RpcBlock(rpc_block)) => {
                 let block_root = rpc_block.block.canonical_root();
 
@@ -381,6 +381,11 @@ impl<T: BeaconChainTypes> ReprocessQueue<T> {
                     .insert(rpc_block, QUEUED_RPC_BLOCK_DELAY);
             }
             InboundEvent::ReadyRpcBlock(queued_rpc_block) => {
+                debug!(
+                    log,
+                    "Sending rpc block for reprocessing";
+                    "block_root" => %queued_rpc_block.block.canonical_root()
+                );
                 if self
                     .ready_work_tx
                     .try_send(ReadyWork::RpcBlock(queued_rpc_block))

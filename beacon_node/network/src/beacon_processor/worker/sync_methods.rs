@@ -48,8 +48,13 @@ impl<T: BeaconChainTypes> Worker<T> {
         let handle = match duplicate_cache.check_and_insert(block.canonical_root()) {
             Some(handle) => handle,
             None => {
+                debug!(
+                    self.log,
+                    "Gossip block is being processed";
+                    "action" => "sending rpc block to reprocessing queue",
+                    "block_root" => %block.canonical_root(),
+                );
                 // Send message to work reprocess queue to retry the block
-
                 let reprocess_msg = ReprocessQueueMessage::RpcBlock(QueuedRpcBlock {
                     block: block.clone(),
                     process_type,
