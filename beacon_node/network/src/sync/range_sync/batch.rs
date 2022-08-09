@@ -210,10 +210,18 @@ impl<T: EthSpec, B: BatchConfig> BatchInfo<T, B> {
     pub fn outcome(&self) -> OpOutcome {
         match self.state {
             BatchState::Poisoned => unreachable!("Poisoned batch"),
-            BatchState::Failed => OpOutcome::Failed {
-                blacklist: self.failed_processing_attempts.len()
-                    > self.failed_download_attempts.len(),
-            },
+            BatchState::Failed => {
+                println!(
+                    "Chain outcome, id: {:?}, processing: {}, download: {}",
+                    (self.start_slot, self.end_slot),
+                    self.failed_processing_attempts.len(),
+                    self.failed_download_attempts.len()
+                );
+                OpOutcome::Failed {
+                    blacklist: self.failed_processing_attempts.len()
+                        > self.failed_download_attempts.len(),
+                }
+            }
             _ => OpOutcome::Continue,
         }
     }
@@ -308,6 +316,10 @@ impl<T: EthSpec, B: BatchConfig> BatchInfo<T, B> {
         match self.state.poison() {
             BatchState::Downloading(peer, _, _request_id) => {
                 // register the attempt and check if the batch can be tried again
+                println!(
+                    "Download failed, mark failed: {}, request_id: {}",
+                    mark_failed, _request_id
+                );
                 if mark_failed {
                     self.failed_download_attempts.push(peer);
                 }
@@ -380,6 +392,7 @@ impl<T: EthSpec, B: BatchConfig> BatchInfo<T, B> {
                 self.state = match procesing_result {
                     BatchProcessingResult::Success => BatchState::AwaitingValidation(attempt),
                     BatchProcessingResult::Failed { count_attempt } => {
+                        println!("Processing failed, count_attempt: {}", count_attempt);
                         if count_attempt {
                             // register the failed attempt
                             self.failed_processing_attempts.push(attempt);
