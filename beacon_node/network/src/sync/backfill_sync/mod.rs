@@ -44,8 +44,8 @@ const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 10;
 /// after `MAX_BATCH_PROCESSING_ATTEMPTS` times, it is considered faulty.
 const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 10;
 
-/// Approximately 2 months
-const EPOCHS_TO_BACKFILL: u64 = 256 * 64;
+/// Approximately 5 months
+const EPOCHS_TO_BACKFILL: u64 = 33024;
 
 /// Custom configuration for the batch object.
 struct BackFillBatchConfig {}
