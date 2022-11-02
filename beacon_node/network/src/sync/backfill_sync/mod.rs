@@ -44,6 +44,9 @@ const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 10;
 /// after `MAX_BATCH_PROCESSING_ATTEMPTS` times, it is considered faulty.
 const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 10;
 
+/// Approximately 2 months
+const EPOCHS_TO_BACKFILL: u64 = 256 * 64;
+
 /// Custom configuration for the batch object.
 struct BackFillBatchConfig {}
 
@@ -1140,18 +1143,31 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
 
     /// Checks with the beacon chain if backfill sync has completed.
     fn check_completed(&mut self) -> bool {
-        if self.current_start == 0 {
-            // Check that the beacon chain agrees
+        if let Ok(epoch) = self.beacon_chain.epoch() {
+            let completed = epoch.saturating_sub(EPOCHS_TO_BACKFILL) >= self.current_start;
+            if completed {
+                info!(
+                    self.log,
+                    "Backfill completed until EPOCHS_TO_BACKFILL";
+                    "current_start" => %self.current_start
+                );
+            }
+            return completed;
+        } else {
+            if self.current_start == 0 {
+                // Check that the beacon chain agrees
 
-            if let Some(anchor_info) = self.beacon_chain.store.get_anchor_info() {
-                // Conditions that we have completed a backfill sync
-                if anchor_info.block_backfill_complete() {
-                    return true;
-                } else {
-                    error!(self.log, "Backfill out of sync with beacon chain");
+                if let Some(anchor_info) = self.beacon_chain.store.get_anchor_info() {
+                    // Conditions that we have completed a backfill sync
+                    if anchor_info.block_backfill_complete() {
+                        return true;
+                    } else {
+                        error!(self.log, "Backfill out of sync with beacon chain");
+                    }
                 }
             }
         }
+
         false
     }
 
