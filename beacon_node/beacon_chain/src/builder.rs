@@ -1,4 +1,7 @@
-use crate::beacon_chain::{CanonicalHead, BEACON_CHAIN_DB_KEY, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY};
+use crate::beacon_chain::{
+    CanonicalHead, BEACON_CHAIN_DB_KEY, DEFAULT_BLOBS_BUFFER_SIZE, DEFAULT_BLOCK_BUFFER_SIZE,
+    ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
+};
 use crate::blob_cache::BlobCache;
 use crate::eth1_chain::{CachingEth1Backend, SszEth1};
 use crate::eth1_finalization_cache::Eth1FinalizationCache;
@@ -22,6 +25,7 @@ use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
 use futures::channel::mpsc::Sender;
 use kzg::{Kzg, TrustedSetup};
+use lru::LruCache;
 use operation_pool::{OperationPool, PersistedOperationPool};
 use parking_lot::RwLock;
 use proto_array::ReOrgThreshold;
@@ -852,6 +856,8 @@ where
             validator_monitor: RwLock::new(validator_monitor),
             blob_cache: BlobCache::default(),
             kzg,
+            block_buffer: LruCache::new(DEFAULT_BLOCK_BUFFER_SIZE),
+            blobs_buffer: LruCache::new(DEFAULT_BLOBS_BUFFER_SIZE),
         };
 
         let head = beacon_chain.head_snapshot();

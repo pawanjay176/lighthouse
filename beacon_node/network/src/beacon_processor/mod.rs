@@ -1779,15 +1779,17 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
                 blob_sidecar,
                 subnet,
                 seen_timestamp,
-            } => task_spawner.spawn_blocking(move || {
-                worker.process_gossip_blob_sidecar(
-                    message_id,
-                    peer_id,
-                    blob_sidecar,
-                    subnet,
-                    Some(work_reprocessing_tx),
-                    seen_timestamp,
-                )
+            } => task_spawner.spawn_async(async move {
+                worker
+                    .process_gossip_blob_sidecar(
+                        message_id,
+                        peer_id,
+                        blob_sidecar,
+                        subnet,
+                        Some(work_reprocessing_tx),
+                        seen_timestamp,
+                    )
+                    .await
             }),
             Work::UnknownBlobSidecar {
                 message_id,
@@ -1795,15 +1797,17 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
                 blob_sidecar,
                 subnet,
                 seen_timestamp,
-            } => task_spawner.spawn_blocking(move || {
-                worker.process_gossip_blob_sidecar(
-                    message_id,
-                    peer_id,
-                    blob_sidecar,
-                    subnet,
-                    None,
-                    seen_timestamp,
-                )
+            } => task_spawner.spawn_async(async move {
+                worker
+                    .process_gossip_blob_sidecar(
+                        message_id,
+                        peer_id,
+                        blob_sidecar,
+                        subnet,
+                        None,
+                        seen_timestamp,
+                    )
+                    .await
             }),
 
             /*

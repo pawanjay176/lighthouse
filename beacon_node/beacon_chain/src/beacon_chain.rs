@@ -73,6 +73,7 @@ use fork_choice::{
 use futures::channel::mpsc::Sender;
 use itertools::process_results;
 use itertools::Itertools;
+use lru::LruCache;
 use operation_pool::{AttestationRef, OperationPool, PersistedOperationPool, ReceivedPreCapella};
 use parking_lot::{Mutex, RwLock};
 use proto_array::{CountUnrealizedFull, DoNotReOrg, ProposerHeadError};
@@ -128,6 +129,17 @@ pub const VALIDATOR_PUBKEY_CACHE_LOCK_TIMEOUT: Duration = Duration::from_secs(1)
 
 /// The timeout for the eth1 finalization cache
 pub const ETH1_FINALIZATION_CACHE_LOCK_TIMEOUT: Duration = Duration::from_millis(200);
+
+// todo(emhane): change data structure to expulse based on time one epoch and allow for multiple
+// blob candidates to one block root.
+/// The number of blocks waiting for the blobs it commits to arrive over the network.
+pub const DEFAULT_BLOCK_BUFFER_SIZE: usize = 10;
+
+// todo(emhane): change data structure to expulse based on time one epoch and allow for multiple
+// blob candidates to one block root.
+/// The number of blobs sidecars waiting for the block that commits them to arrive over the
+/// network.
+pub const DEFAULT_BLOBS_BUFFER_SIZE: usize = 10;
 
 /// The latest delay from the start of the slot at which to attempt a 1-slot re-org.
 fn max_re_org_slot_delay(seconds_per_slot: u64) -> Duration {
@@ -427,6 +439,10 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub validator_monitor: RwLock<ValidatorMonitor<T::EthSpec>>,
     pub blob_cache: BlobCache<T::EthSpec>,
     pub kzg: Option<Arc<kzg::Kzg>>,
+    /// Blobs have arrived over the network and wait for the block they are kzg-committed in.
+    pub blobs_buffer: LruCache<Hash256, SignedBlobSidecar<T::EthSpec>>,
+    /// A block has arrived over the network and waits for the blobs it kzg-commits.
+    pub block_buffer: LruCache<Hash256, GossipVerifiedBlock<T>>,
 }
 
 type BeaconBlockAndState<T, Payload> = (BeaconBlock<T, Payload>, BeaconState<T>);

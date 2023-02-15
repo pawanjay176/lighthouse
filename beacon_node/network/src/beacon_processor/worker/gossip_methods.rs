@@ -1,11 +1,13 @@
 use crate::beacon_processor::work_reprocessing_queue::QueuedBlobSidecar;
 use crate::{metrics, service::NetworkMessage, sync::SyncMessage};
 
-use beacon_chain::blob_verification::{AsBlock, BlockWrapper};
 use beacon_chain::store::Error;
 use beacon_chain::{
     attestation_verification::{self, Error as AttnError, VerifiedAttestation},
-    blob_verification::BlobError,
+    blob_verification::{
+        couple_block_and_blobs_for_import_to_fork_choice, has_blobs, validate_blob_for_gossip,
+        AsBlock, BlobError, BlockWrapper, IntoAvailableBlock,
+    },
     light_client_finality_update_verification::Error as LightClientFinalityUpdateError,
     light_client_optimistic_update_verification::Error as LightClientOptimisticUpdateError,
     observed_operations::ObservationOutcome,
@@ -19,7 +21,10 @@ use operation_pool::ReceivedPreCapella;
 use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use store::hot_cold_store::HotColdDBError;
 use tokio::sync::mpsc;
 use types::{
@@ -667,7 +672,8 @@ impl<T: BeaconChainTypes> Worker<T> {
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
     ) {
-        if let Some(gossip_verified_block) = self
+        // Propagate block on network.
+        let Some(gossip_verified_block) = self
             .process_gossip_unverified_block(
                 message_id,
                 peer_id,
@@ -677,53 +683,140 @@ impl<T: BeaconChainTypes> Worker<T> {
                 seen_duration,
             )
             .await
-        {
-            let block_root = gossip_verified_block.block_root;
+        else { return };
 
-            if let Some(handle) = duplicate_cache.check_and_insert(block_root) {
+        let block_root = gossip_verified_block.block_root;
+
+        // Import block to fork choice if its blobs have arrived.
+        let Ok(is_dab_check) = self.chain.is_data_availability_check_required() else {
+            // todo(emhane): handle error
+            return
+        };
+        let Ok(has_blobs) = has_blobs(gossip_verified_block.block.as_block()) else {
+            // todo(emhane): handle error
+            return
+        };
+        let fork_choice_unverified_block = if is_dab_check && has_blobs {
+            let Some(blobs) = self.chain.blobs_buffer.pop(&block_root) else {
+                debug!(
+                    self.log, "Still waiting on blobs that are kzg-commited in block";
+                    "block_root" => %block_root,
+                );
+                self.chain.block_buffer.put(block_root, gossip_verified_block);
+                return
+            };
+            let block = gossip_verified_block.block.deconstruct().0;
+            // todo(emhane): What do we want to do if these blobs didn't match the block?
+            //
+            let Ok(wrapper) = couple_block_and_blobs_for_import_to_fork_choice(
+                block,
+                Arc::new(blobs.message), // todo(emhane): needs to be signed to cross 
+                // verify signatures of block and blobs.
+            ) else {
+                // todo(emhane): handle error
+                return
+            };
+            // If block has blobs, verifies blobs against kzg-commits in the block.
+            let Ok(available_block) = wrapper.into_available_block(block_root, &self.chain) else {
+                // todo(emhane): handle error
+                return
+            };
+            gossip_verified_block.set_block(available_block)
+        } else {
+            gossip_verified_block
+        };
+
+        let Some(handle) = duplicate_cache.check_and_insert(block_root) else {
+                debug!(
+                    self.log,
+                    "RPC block is being imported";
+                    "block_root" => %block_root,
+                );
+                return
+            };
+        self.process_gossip_verified_block(
+            peer_id,
+            fork_choice_unverified_block,
+            reprocess_tx,
+            seen_duration,
+        )
+        .await;
+        // Drop the handle to remove the entry from the cache
+        drop(handle);
+    }
+
+    pub async fn process_gossip_blob_sidecar(
+        self,
+        message_id: MessageId,
+        peer_id: PeerId,
+        blob_sidecar: Box<SignedBlobSidecar<T::EthSpec>>,
+        subnet: u64,
+        reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
+        duplicate_cache: DuplicateCache,
+        seen_duration: Duration,
+    ) {
+        match validate_blob_for_gossip(blob_sidecar.message, &self.chain) {
+            Ok(validated_sidecar) => {
+                // Register with validator monitor
+                // Propagate
+                // Import blobs to fork choice if its block has arrived.
+
+                let block_root = validated_sidecar.beacon_block_root;
+
+                let Some(gossip_verified_block) = self.chain.block_buffer.pop(&block_root) else {
+                    debug!(
+                        self.log, "Still waiting on block that kzg-commits blobs";
+                        "block_root" => %block_root,
+                    );
+                    self.chain.blobs_buffer.put(block_root, blob_sidecar);
+                    return
+                };
+
+                let block = gossip_verified_block.block.block_cloned();
+                // todo(emhane): What do we want to do if these blobs didn't match the block?
+                let Ok(wrapper) =  couple_block_and_blobs_for_import_to_fork_choice(
+                    block,
+                    Arc::new(blob_sidecar), // this needs to todo(emhane): needs to be signed to cross verify signatures of block and blobs?
+                ) else {
+                    // todo(emhane): handle error
+                    return
+                };
+                // If block has blobs, verifies blobs against kzg-commits in the block.
+                let Ok(available_block) = wrapper.into_available_block(block_root, &self.chain) else {
+                    // todo(emhane): handle error
+                    return
+                };
+
+                let fork_choice_unverified_block = gossip_verified_block.set_block(available_block);
+
+                let Some(handle) = duplicate_cache.check_and_insert(block_root) else {
+                    debug!(
+                        self.log,
+                        "RPC block is being imported";
+                        "block_root" => %block_root,
+                    );
+                    return
+                };
                 self.process_gossip_verified_block(
                     peer_id,
-                    gossip_verified_block,
+                    fork_choice_unverified_block,
                     reprocess_tx,
                     seen_duration,
                 )
                 .await;
                 // Drop the handle to remove the entry from the cache
                 drop(handle);
-            } else {
-                debug!(
-                    self.log,
-                    "RPC block is being imported";
-                    "block_root" => %block_root,
-                );
             }
-        }
-    }
-
-    pub fn process_gossip_blob_sidecar(
-        self,
-        _message_id: MessageId,
-        _peer_id: PeerId,
-        _blob_sidecar: Box<SignedBlobSidecar<T::EthSpec>>,
-        _subnet: u64,
-        _reprocess_tx: Option<mpsc::Sender<ReprocessQueueMessage<T>>>,
-        _seen_duration: Duration,
-    ) {
-        // match self.chain.verify_blobs_sidecar_for_gossip(&blob) {
-        //     Ok(verified_sidecar) => {
-        //         // Register with validator monitor
-        //         // Propagate
-        //         // Apply to fork choice
-        //     }
-        //     Err(error) => self.handle_blobs_verification_failure(
-        //         peer_id,
-        //         message_id,
-        //         reprocess_tx,
-        //         error,
-        //         blob,
-        //         seen_timestamp,
-        //     ),
-        // };
+            Err(error) => self.handle_blobs_verification_failure(
+                peer_id,
+                message_id,
+                Some(reprocess_tx),
+                error,
+                blob_sidecar,
+                subnet,
+                seen_duration,
+            ),
+        };
         unimplemented!()
     }
 

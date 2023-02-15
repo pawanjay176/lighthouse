@@ -52,8 +52,7 @@
 #![allow(clippy::result_large_err)]
 
 use crate::blob_verification::{
-    validate_blob_for_gossip, AsBlock, AvailableBlock, BlobError, BlockWrapper, IntoAvailableBlock,
-    IntoBlockWrapper,
+    AsBlock, AvailableBlock, BlobError, BlockWrapper, IntoAvailableBlock, IntoBlockWrapper,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{
@@ -929,7 +928,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         // Validate the block's execution_payload (if any).
         validate_execution_payload_for_gossip(&parent_block, block.message(), chain)?;
 
-        let available_block = validate_blob_for_gossip(block, block_root, chain)?;
+        let available_block = block.into_available_block(block_root, chain)?;
 
         // Having checked the proposer index and the block root we can cache them.
         let consensus_context = ConsensusContext::new(available_block.slot())
@@ -947,6 +946,11 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
 
     pub fn block_root(&self) -> Hash256 {
         self.block_root
+    }
+
+    pub fn set_block(mut self, available_block: AvailableBlock<T::EthSpec>) -> Self {
+        self.block = available_block;
+        self
     }
 }
 

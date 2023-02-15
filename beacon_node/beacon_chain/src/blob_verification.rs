@@ -76,7 +76,7 @@ pub enum BlobError {
         beacon_block_root: Hash256,
     },
 
-    /// The `BlobSidecar` was gossiped over an incorrect subnet.
+    /// The `BlobsSidecar` was gossiped over an incorrect subnet.
     InvalidSubnet {
         expected: u64,
         received: u64,
@@ -135,33 +135,41 @@ impl From<BeaconStateError> for BlobError {
 }
 
 pub fn validate_blob_for_gossip<T: BeaconChainTypes>(
-    block_wrapper: BlockWrapper<T::EthSpec>,
-    block_root: Hash256,
+    blobs_sidecar: BlobsSidecar<T::EthSpec>,
     chain: &BeaconChain<T>,
-) -> Result<AvailableBlock<T::EthSpec>, BlobError> {
-    if let BlockWrapper::BlockAndBlob(ref block, ref blobs_sidecar) = block_wrapper {
-        let blob_slot = blobs_sidecar.beacon_block_slot;
-        // Do not gossip or process blobs from future or past slots.
-        let latest_permissible_slot = chain
-            .slot_clock
-            .now_with_future_tolerance(MAXIMUM_GOSSIP_CLOCK_DISPARITY)
-            .ok_or(BeaconChainError::UnableToReadSlot)?;
-        if blob_slot > latest_permissible_slot {
-            return Err(BlobError::FutureSlot {
-                message_slot: latest_permissible_slot,
-                latest_permissible_slot: blob_slot,
-            });
-        }
-
-        if blob_slot != block.slot() {
-            return Err(BlobError::SlotMismatch {
-                blob_slot,
-                block_slot: block.slot(),
-            });
-        }
+) -> Result<BlobsSidecar<T::EthSpec>, BlobError> {
+    let blob_slot = blobs_sidecar.beacon_block_slot;
+    // Do not gossip or process blobs from future or past slots.
+    let latest_permissible_slot = chain
+        .slot_clock
+        .now_with_future_tolerance(MAXIMUM_GOSSIP_CLOCK_DISPARITY)
+        .ok_or(BeaconChainError::UnableToReadSlot)?;
+    if blob_slot > latest_permissible_slot {
+        return Err(BlobError::FutureSlot {
+            message_slot: latest_permissible_slot,
+            latest_permissible_slot: blob_slot,
+        });
     }
+    Ok(blobs_sidecar)
+}
 
-    block_wrapper.into_available_block(block_root, chain)
+/// Returns `true` if the block kzg-commits blob data.
+pub fn has_blobs<T: EthSpec>(block: &SignedBeaconBlock<T>) -> Result<bool, BlobError> {
+    Ok(!block.message().body().blob_kzg_commitments()?.is_empty())
+}
+
+pub fn couple_block_and_blobs_for_import_to_fork_choice<T: BeaconChainTypes>(
+    block: Arc<SignedBeaconBlock<T::EthSpec>>,
+    blobs: Arc<BlobsSidecar<T::EthSpec>>,
+) -> Result<BlockWrapper<T::EthSpec>, BlobError> {
+    let blob_slot = blobs.beacon_block_slot;
+    if blob_slot != block.slot() {
+        return Err(BlobError::SlotMismatch {
+            blob_slot,
+            block_slot: block.slot(),
+        });
+    }
+    Ok(BlockWrapper::BlockAndBlob(block, blobs))
 }
 
 pub fn validate_blob_sidecar_for_gossip<T: BeaconChainTypes>(
