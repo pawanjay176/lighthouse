@@ -11,8 +11,8 @@ use crate::blob_verification::{AsBlock, AvailableBlock, BlockWrapper};
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
     check_block_is_finalized_descendant, check_block_relevancy, get_block_root,
-    signature_verify_chain_segment, BlockError, ExecutionPendingBlock, GossipVerifiedBlock,
-    IntoExecutionPendingBlock, PayloadVerificationOutcome, POS_PANDA_BANNER,
+    signature_verify_chain_segment, BlockError, ExecutedBlock, ExecutionPendingBlock,
+    GossipVerifiedBlock, IntoExecutionPendingBlock, PayloadVerificationOutcome, POS_PANDA_BANNER,
 };
 pub use crate::canonical_head::{CanonicalHead, CanonicalHeadRwLock};
 use crate::chain_config::ChainConfig;
@@ -442,7 +442,32 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     /// Blobs have arrived over the network and wait for the block they are kzg-committed in.
     pub blobs_buffer: LruCache<Hash256, SignedBlobSidecar<T::EthSpec>>,
     /// A block has arrived over the network and waits for the blobs it kzg-commits.
-    pub block_buffer: LruCache<Hash256, GossipVerifiedBlock<T>>,
+    pub block_buffer: LruCache<Hash256, BlockBufferItem<T>>,
+}
+
+pub struct BlockBufferItem<T: BeaconChainTypes> {
+    block_root: Hash256,
+    block: BufferBlock<T>,
+}
+
+pub enum BufferBlock<T: BeaconChainTypes> {
+    GossipVerified(GossipVerifiedBlock<T>),
+    PayloadExecuted(ExecutedBlock<T>),
+}
+
+impl<T: BeaconChainTypes> BlockBufferItem<T> {
+    pub fn new(block_root: Hash256, gossip_verified_block: GossipVerifiedBlock<T>) -> Self {
+        BlockBufferItem {
+            block_root,
+            block: BufferBlock::GossipVerified(gossip_verified_block),
+        }
+    }
+
+    pub fn advance_state(&mut self, block: ExecutedBlock<T>) {
+        if BufferBlock::GossipVerified(_) = self.block {
+            *self.block = BufferBlock::PayloadExecuted(block)
+        }
+    }
 }
 
 type BeaconBlockAndState<T, Payload> = (BeaconBlock<T, Payload>, BeaconState<T>);
@@ -2722,7 +2747,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 notify_execution_layer,
             )?;
             chain
-                .import_execution_pending_block(execution_pending, count_unrealized)
+                .verify_execution_payload(execution_pending, count_unrealized)
                 .await
         };
 
@@ -2772,15 +2797,105 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         }
     }
 
-    /// Accepts a fully-verified block and imports it into the chain without performing any
-    /// additional verification.
-    ///
-    /// An error is returned if the block was unable to be imported. It may be partially imported
-    /// (i.e., this function is not atomic).
-    async fn import_execution_pending_block(
-        self: Arc<Self>,
-        execution_pending_block: ExecutionPendingBlock<T>,
+        pub async fn process_block<B: IntoExecutionPendingBlock<T>>(
+        self: &Arc<Self>,
+        block_root: Hash256,
+        unverified_block: B,
         count_unrealized: CountUnrealized,
+        notify_execution_layer: NotifyExecutionLayer,
+    ) -> Result<Hash256, BlockError<T::EthSpec>> {
+        // Start the Prometheus timer.
+        let _full_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_TIMES);
+
+        // Increment the Prometheus counter for block processing requests.
+        metrics::inc_counter(&metrics::BLOCK_PROCESSING_REQUESTS);
+
+        let slot = unverified_block.block().slot();
+
+        // A small closure to group the verification and import errors.
+        let chain = self.clone();
+        let import_block = async move {
+            let Some(buffered_block) = self.block_buffer.get_mut(block_root) else {
+                return Err(BlockError::"this function shouldn't have been called")
+            };
+            match buffered_block.get_block() {
+                BufferBlock::GossipVerified(block) => {
+                    let execution_pending = block.into_execution_pending_block(
+                        block_root,
+                        &chain,
+                        notify_execution_layer,
+                    )?;
+                    let executed_block = chain
+                        .verify_execution_payload(execution_pending, count_unrealized)
+                        .await;
+                    match chain.import_block_to_fork_choice(executed_block).await {
+                        Ok(hash) => Ok(hash),
+                        Err(BlobError::UnavailableBlobs) => {
+                            buffered_block.advance_state();
+                            Ok("not ready yet")
+                        }
+                        Err(e) => Err(e),
+                    } 
+                }
+                BufferBlock::PayloadExecuted(executed_block) => {
+                hain.import_block_to_fork_choice(executed_block).await?
+                }
+            }
+        };
+
+        // Verify and import the block.
+        match import_block.await {
+            // The block was successfully verified and imported. Yay.
+            Ok(block_root) => {
+                trace!(
+                    self.log,
+                    "Beacon block imported";
+                    "block_root" => ?block_root,
+                     "block_slot" => slot,
+                );
+
+                // Increment the Prometheus counter for block processing successes.
+                metrics::inc_counter(&metrics::BLOCK_PROCESSING_SUCCESSES);
+
+                Ok(block_root)
+            }
+            Err(e @ BlockError::BeaconChainError(BeaconChainError::TokioJoin(_))) => {
+                debug!(
+                    self.log,
+                    "Beacon block processing cancelled";
+                    "error" => ?e,
+                );
+                Err(e)
+            }
+            // There was an error whilst attempting to verify and import the block. The block might
+            // be partially verified or partially imported.
+            Err(BlockError::BeaconChainError(e)) => {
+                crit!(
+                    self.log,
+                    "Beacon block processing error";
+                    "error" => ?e,
+                );
+                Err(BlockError::BeaconChainError(e))
+            }
+            Err(BlobError::UnavailableBlobs) => {
+                let buffered_block = self.block_buffer.entry(block_root);
+                *entry.advance_state()
+            }
+            // The block failed verification.
+            Err(other) => {
+                trace!(
+                    self.log,
+                    "Beacon block rejected";
+                    "reason" => other.to_string(),
+                );
+                Err(other)
+            }
+        }
+    }
+
+    /// Verifies the execution payload before importing to fork choice.
+    async fn verify_execution_payload(
+        execution_pending_block: ExecutionPendingBlock<T>,
     ) -> Result<Hash256, BlockError<T::EthSpec>> {
         let ExecutionPendingBlock {
             block,
@@ -2801,8 +2916,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .map_err(BeaconChainError::TokioJoin)?
             .ok_or(BeaconChainError::RuntimeShutdown)??;
 
+        // RELIC OF THE MERGE:
         // Log the PoS pandas if a merge transition just occurred.
-        if is_valid_merge_transition_block {
+        /*if is_valid_merge_transition_block {
             info!(self.log, "{}", POS_PANDA_BANNER);
             info!(
                 self.log,
@@ -2829,14 +2945,43 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     .block_hash()
                     .into_root()
             );
-        }
+        }*/
+        Ok(ExecutedBlock {
+            block,
+            block_root,
+            state,
+            confirmed_state_roots,
+            payload_verification_status,
+            parent_block,
+            parent_eth1_finalization_data,
+            consensus_context,
+        })
+    }
+
+    /// Verifies a block's kzg-commits against its blobs before importing to chain.
+    async fn import_block_to_fork_choice(
+        self: Arc<Self>,
+        executed_block: ExecutedBlock<T::EthSpec>,
+        count_unrealized: CountUnrealized,
+    ) -> Result<Hash256, BlockError<T::EthSpec>> {
+        let ExecutedBlock {
+            block,
+            block_root,
+            state,
+            confirmed_state_roots,
+            payload_verification_status,
+            parent_block,
+            parent_eth1_finalization_data,
+            consensus_context,
+        } = executed_block;
+        let available_block = block.into_available_block()?;
 
         let chain = self.clone();
         let block_hash = self
             .spawn_blocking_handle(
                 move || {
                     chain.import_block(
-                        block,
+                        available_block,
                         block_root,
                         state,
                         confirmed_state_roots,
@@ -2847,7 +2992,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         consensus_context,
                     )
                 },
-                "payload_verification_handle",
+                "payload_verification_handle", // todo(emhane): This name should probably change
             )
             .await??;
 

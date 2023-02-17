@@ -697,12 +697,12 @@ impl<T: BeaconChainTypes> Worker<T> {
             return
         };
         let fork_choice_unverified_block = if is_dab_check && has_blobs {
-            let Some(blobs) = self.chain.blobs_buffer.pop(&block_root) else {
+            let Some(blobs) = self.chain.blobs_buffer.get(&block_root) else {
                 debug!(
                     self.log, "Still waiting on blobs that are kzg-commited in block";
                     "block_root" => %block_root,
                 );
-                self.chain.block_buffer.put(block_root, gossip_verified_block);
+                self.chain.block_buffer.put(block_root, BlockBufferItem::new(block_root, gossip_verified_block));
                 return
             };
             let block = gossip_verified_block.block.deconstruct().0;
@@ -763,7 +763,7 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 let block_root = validated_sidecar.beacon_block_root;
 
-                let Some(gossip_verified_block) = self.chain.block_buffer.pop(&block_root) else {
+                let Some(block) = self.chain.block_buffer.get(&block_root) else {
                     debug!(
                         self.log, "Still waiting on block that kzg-commits blobs";
                         "block_root" => %block_root,
@@ -772,7 +772,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                     return
                 };
 
-                let block = gossip_verified_block.block.block_cloned();
+                let block = block..block_cloned();
                 // todo(emhane): What do we want to do if these blobs didn't match the block?
                 let Ok(wrapper) =  couple_block_and_blobs_for_import_to_fork_choice(
                     block,

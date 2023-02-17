@@ -1574,6 +1574,49 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
             payload_verification_handle,
         })
     }
+
+    async fn verify_execution_payload(self) -> Result<ExecutedBlock<T>, BlockError<T::EthSpec>> {
+        let ExecutionPendingBlock {
+            block,
+            block_root,
+            state,
+            parent_block,
+            confirmed_state_roots,
+            payload_verification_handle,
+            parent_eth1_finalization_data,
+            consensus_context,
+        } = self;
+
+        let PayloadVerificationOutcome {
+            payload_verification_status,
+            is_valid_merge_transition_block,
+        } = payload_verification_handle
+            .await
+            .map_err(BeaconChainError::TokioJoin)?
+            .ok_or(BeaconChainError::RuntimeShutdown)??;
+
+        Ok(ExecutedBlock {
+            block,
+            block_root,
+            state,
+            confirmed_state_roots,
+            payload_verification_status,
+            parent_block,
+            parent_eth1_finalization_data,
+            consensus_context,
+        })
+    }
+}
+
+pub struct ExecutedBlock<T: EthSpec> {
+    block: AvailableBlock<T>,
+    block_root: Hash256,
+    state: BeaconState<T>,
+    confirmed_state_roots: Vec<Hash256>,
+    payload_verification_status: PayloadVerificationStatus,
+    parent_block: SignedBeaconBlock<T>,
+    parent_eth1_finalization_data: Eth1FinalizationData,
+    consensus_context: ConsensusContext<T>,
 }
 
 /// Check that the count of skip slots between the block and its parent does not exceed our maximum
