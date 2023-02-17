@@ -402,7 +402,25 @@ impl<T: BeaconChainTypes> IntoAvailableBlock<T> for BlockWrapper<T::EthSpec> {
                 }
             });
         match self {
-            BlockWrapper::Block(block) => AvailableBlock::new(block, block_root, da_check_required),
+            BlockWrapper::Block(block) => {
+                match da_check_required {
+                    DataAvailabilityCheckRequired::Yes => {
+                        let kzg_commitments = block
+                            .message()
+                            .body()
+                            .blob_kzg_commitments()
+                            .map_err(|_| BlobError::KzgCommitmentMissing)?;
+                        if kzg_commitments.is_empty() {
+                            AvailableBlock::new(block, block_root, da_check_required)
+                        } else {
+                            // AvailabilityPendingBlock
+                        }
+                    }
+                    DataAvailabilityCheckRequired::No => {
+                        AvailableBlock::new(block, block_root, da_check_required)
+                    }
+                }
+            }
             BlockWrapper::BlockAndBlob(block, blobs_sidecar) => {
                 if matches!(da_check_required, DataAvailabilityCheckRequired::Yes) {
                     let kzg_commitments = block
