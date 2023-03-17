@@ -12,8 +12,9 @@ use std::future::Future;
 use std::sync::{mpsc, Arc};
 use tokio::sync::mpsc::Sender;
 use types::blob_sidecar::{BlobIdentifier, BlobSidecar};
-use types::{EthSpec, Hash256, SignedBeaconBlock};
+use types::{EthSpec, Hash256, SignedBeaconBlock, SignedBlobSidecar};
 
+#[derive(Debug)]
 pub enum BlobCacheError {
     DuplicateBlob(Hash256),
     Kzg(KzgError),
@@ -113,6 +114,14 @@ impl<T: EthSpec> DataAvailabilityChecker<T> {
         }
 
         Ok(())
+    }
+
+    /// Adds the blob to the cache. Returns true if adding the blob completes
+    /// all the required blob sidecars for a given block root.
+    ///
+    /// Note: we can only know this if we know `block.kzg_commitments.len()`
+    pub fn put_blob_temp(&self, blob: Arc<SignedBlobSidecar<T>>) -> Result<bool, BlobCacheError> {
+        unimplemented!()
     }
 
     /// Returns all blobs associated with a given block root otherwise returns
