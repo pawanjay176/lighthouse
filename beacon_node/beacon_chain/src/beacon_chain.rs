@@ -2638,10 +2638,14 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Returns `Ok(block_root)` if the given `unverified_block` was successfully verified and
     /// imported into the chain.
     ///
+    /// For post deneb blocks, this returns a `BlockError::AvailabilityPending` error
+    /// if the corresponding blobs are not in the required caches.
+    ///
     /// Items that implement `IntoExecutionPendingBlock` include:
     ///
     /// - `SignedBeaconBlock`
     /// - `GossipVerifiedBlock`
+    /// - `BlockWrapper`
     ///
     /// ## Errors
     ///
@@ -2660,7 +2664,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // Increment the Prometheus counter for block processing requests.
         metrics::inc_counter(&metrics::BLOCK_PROCESSING_REQUESTS);
 
-        let slot = unverified_block.block().slot();
         let chain = self.clone();
 
         let execution_pending = unverified_block.into_execution_pending_block(
@@ -2675,11 +2678,26 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .into_executed_block(execution_pending, count_unrealized)
             .await?;
 
+        Self::verify_da_and_import(&self, block_root, executed_block, count_unrealized).await
+    }
+
+    pub async fn verify_da_and_import(
+        self: &Arc<Self>,
+        block_root: Hash256,
+        executed_block: ExecutedBlock<T::EthSpec>,
+        count_unrealized: CountUnrealized,
+    ) -> Result<Hash256, BlockError<T::EthSpec>> {
+        let slot = executed_block.block.slot();
+
         // Check if the executed block has all it's blobs available to qualify as a fully
         // available block
         let import_block = if let Some(da_checker) = self.data_availability_checker.as_ref() {
-            da_checker.put_block(executed_block); //TODO(sean) errors
-            return Err(BlockError::AvailabilityPending(block_root));
+            if let Ok(blobs) = da_checker.blobs(block_root) {
+                self.clone()
+                    .import_available_block(executed_block, blobs, count_unrealized)
+            } else {
+                return Err(BlockError::AvailabilityPending(executed_block));
+            }
         } else {
             self.clone().import_available_block(
                 executed_block,

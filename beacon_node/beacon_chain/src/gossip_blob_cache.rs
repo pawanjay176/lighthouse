@@ -1,4 +1,4 @@
-use crate::blob_verification::{verify_data_availability, AsBlock};
+use crate::blob_verification::{verify_data_availability, AsBlock, BlobError, VerifiedBlobs};
 use crate::block_verification::{ExecutedBlock, IntoExecutionPendingBlock};
 use crate::kzg_utils::validate_blob;
 use crate::{BeaconChain, BeaconChainError, BeaconChainTypes, BlockError};
@@ -17,6 +17,8 @@ use types::{EthSpec, Hash256, SignedBeaconBlock};
 pub enum BlobCacheError {
     DuplicateBlob(Hash256),
     Kzg(KzgError),
+    /// TODO: Return the specific indices that are not available
+    UnavailableBlobs,
 }
 /// This cache contains
 ///  - blobs that have been gossip verified
@@ -111,6 +113,12 @@ impl<T: EthSpec> DataAvailabilityChecker<T> {
         }
 
         Ok(())
+    }
+
+    /// Returns all blobs associated with a given block root otherwise returns
+    /// a UnavailableBlobs error.
+    pub fn blobs(&self, block_root: Hash256) -> Result<VerifiedBlobs<T>, BlobCacheError> {
+        unimplemented!()
     }
 
     pub fn put_block(&self, executed_block: ExecutedBlock<T>) -> Result<(), BlobCacheError> {

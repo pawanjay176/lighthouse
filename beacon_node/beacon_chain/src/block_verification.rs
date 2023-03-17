@@ -307,7 +307,7 @@ pub enum BlockError<T: EthSpec> {
         parent_root: Hash256,
     },
     BlobValidation(BlobError),
-    AvailabilityPending(Hash256),
+    AvailabilityPending(ExecutedBlock<T>),
 }
 
 impl<T: EthSpec> From<BlobError> for BlockError<T> {
@@ -677,6 +677,12 @@ pub struct ExecutedBlock<E: EthSpec> {
     pub confirmed_state_roots: Vec<Hash256>,
     pub consensus_context: ConsensusContext<E>,
     pub payload_verification_outcome: PayloadVerificationOutcome,
+}
+
+impl<E: EthSpec> std::fmt::Debug for ExecutedBlock<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.block)
+    }
 }
 
 /// Implemented on types that can be converted into a `ExecutionPendingBlock`.
