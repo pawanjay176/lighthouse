@@ -44,7 +44,8 @@ exec $GETH_BINARY \
     --datadir $data_dir \
     --ipcdisable \
     --http \
-    --http.api="engine,eth,web3,net,debug" \
+    --http.api="engine,eth,web3,net,debug,personal,admin" \
+    --allow-insecure-unlock \
     --networkid=$CHAIN_ID \
     --syncmode=full \
     --bootnodes $EL_BOOTNODE_ENODE \
