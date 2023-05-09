@@ -33,7 +33,7 @@ pub use methods::{
 };
 pub use outbound::OutboundFramed;
 pub use outbound::OutboundRequest;
-pub use protocol::{max_rpc_size, Encoding, Protocol, ProtocolId, RPCError, RPCProtocol, Version};
+pub use protocol::{max_rpc_size, Encoding, Protocol, ProtocolId, RPCError, RPCProtocol};
 
 use self::config::OutboundRateLimiterConfig;
 use self::self_limiter::SelfRateLimiter;
@@ -263,7 +263,7 @@ where
                 }
                 Err(RateLimitedErr::TooLarge) => {
                     // we set the batch sizes, so this is a coding/config err for most protocols
-                    let protocol = req.protocol();
+                    let protocol = req.protocol().protocol();
                     if matches!(protocol, Protocol::BlocksByRange) {
                         debug!(self.log, "Blocks by range request will never be processed"; "request" => %req);
                     } else {
@@ -340,7 +340,7 @@ where
         serializer.emit_arguments("peer_id", &format_args!("{}", self.peer_id))?;
         let (msg_kind, protocol) = match &self.event {
             Ok(received) => match received {
-                RPCReceived::Request(_, req) => ("request", req.protocol()),
+                RPCReceived::Request(_, req) => ("request", req.protocol().protocol()),
                 RPCReceived::Response(_, res) => ("response", res.protocol()),
                 RPCReceived::EndOfStream(_, end) => (
                     "end_of_stream",
