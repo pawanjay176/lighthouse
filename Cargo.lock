@@ -994,7 +994,7 @@ dependencies = [
 [[package]]
 name = "c-kzg"
 version = "0.1.0"
-source = "git+https://github.com/ethereum//c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92#13cec820c08f45318f82ed4e0da0300042758b92"
+source = "git+https://github.com/jtraglia//c-kzg-4844?branch=boxes-and-refs#421cf3e6d213ce48ad9f55b30ab072e359ab79c6"
 dependencies = [
  "bindgen 0.64.0",
  "cc",
@@ -1007,7 +1007,7 @@ dependencies = [
 [[package]]
 name = "c-kzg"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92#13cec820c08f45318f82ed4e0da0300042758b92"
+source = "git+https://github.com/jtraglia/c-kzg-4844?branch=boxes-and-refs#421cf3e6d213ce48ad9f55b30ab072e359ab79c6"
 dependencies = [
  "bindgen 0.64.0",
  "cc",
@@ -4135,8 +4135,8 @@ name = "kzg"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
- "c-kzg 0.1.0 (git+https://github.com/ethereum//c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92)",
- "c-kzg 0.1.0 (git+https://github.com/ethereum/c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92)",
+ "c-kzg 0.1.0 (git+https://github.com/jtraglia//c-kzg-4844?branch=boxes-and-refs)",
+ "c-kzg 0.1.0 (git+https://github.com/jtraglia/c-kzg-4844?branch=boxes-and-refs)",
  "derivative",
  "ethereum_hashing",
  "ethereum_serde_utils",
