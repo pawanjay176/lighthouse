@@ -8,7 +8,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 
 pub use crate::{kzg_commitment::KzgCommitment, kzg_proof::KzgProof, trusted_setup::TrustedSetup};
-pub use c_kzg::{Bytes32, Bytes48};
+pub use kzg_rust::{Bytes32, Bytes48};
 
 #[derive(Debug)]
 pub enum Error {
@@ -22,15 +22,8 @@ pub enum Error {
 
 #[derive(Debug)]
 pub enum CryptoError {
-    CKzg(c_kzg::Error),
     CKzgMin(c_kzg_min::Error),
     RustCKzg(kzg_rust::Error),
-}
-
-impl From<c_kzg::Error> for CryptoError {
-    fn from(e: c_kzg::Error) -> Self {
-        Self::CKzg(e)
-    }
 }
 
 impl From<c_kzg_min::Error> for CryptoError {
@@ -252,15 +245,11 @@ macro_rules! implement_kzg_preset {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, arbitrary::Arbitrary)]
-pub struct MainnetKzgPreset;
-
-#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, arbitrary::Arbitrary)]
 pub struct MainnetRustKzgPreset;
 
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, arbitrary::Arbitrary)]
 pub struct MinimalKzgPreset;
 
-implement_kzg_preset!(MainnetKzgPreset, c_kzg, Mainnet);
 implement_kzg_preset!(MinimalKzgPreset, c_kzg_min, Minimal);
 
 impl BlobTrait for kzg_rust::Blob {

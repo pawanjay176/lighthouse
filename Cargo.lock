@@ -896,7 +896,7 @@ name = "bls"
 version = "0.2.0"
 dependencies = [
  "arbitrary",
- "blst 0.3.10",
+ "blst 0.3.6",
  "ethereum-types 0.14.1",
  "ethereum_hashing",
  "ethereum_serde_utils",
@@ -1059,19 +1059,6 @@ dependencies = [
 name = "c-kzg"
 version = "0.1.0"
 source = "git+https://github.com/pawanjay176//c-kzg-4844?branch=main#05312243b607e45af3eb734de309725ad0c9c420"
-dependencies = [
- "bindgen 0.64.0",
- "cc",
- "glob",
- "hex",
- "libc",
- "serde",
-]
-
-[[package]]
-name = "c-kzg"
-version = "0.1.0"
-source = "git+https://github.com/pawanjay176/c-kzg-4844?branch=main#05312243b607e45af3eb734de309725ad0c9c420"
 dependencies = [
  "bindgen 0.64.0",
  "cc",
@@ -4196,8 +4183,7 @@ name = "kzg"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
- "c-kzg 0.1.0 (git+https://github.com/pawanjay176//c-kzg-4844?branch=main)",
- "c-kzg 0.1.0 (git+https://github.com/pawanjay176/c-kzg-4844?branch=main)",
+ "c-kzg",
  "derivative",
  "ethereum_hashing",
  "ethereum_serde_utils",

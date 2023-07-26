@@ -1,4 +1,4 @@
-use c_kzg::{BYTES_PER_G1_POINT, BYTES_PER_G2_POINT, FIELD_ELEMENTS_PER_BLOB};
+use kzg_rust::{BYTES_PER_G1, BYTES_PER_G2, field_elements_per_blob};
 use serde::{
     de::{self, Deserializer, Visitor},
     Deserialize, Serialize,
@@ -6,14 +6,14 @@ use serde::{
 
 /// Wrapper over a BLS G1 point's byte representation.
 #[derive(Debug, Clone, PartialEq)]
-struct G1Point([u8; BYTES_PER_G1_POINT]);
+struct G1Point([u8; BYTES_PER_G1]);
 
 /// Wrapper over a BLS G2 point's byte representation.
 #[derive(Debug, Clone, PartialEq)]
-struct G2Point([u8; BYTES_PER_G2_POINT]);
+struct G2Point([u8; BYTES_PER_G2]);
 
 /// Contains the trusted setup parameters that are required to instantiate a
-/// `c_kzg::KzgSettings` object.
+/// `kzg_rust::KzgSettings` object.
 ///
 /// The serialize/deserialize implementations are written according to
 /// the format specified in the the ethereum consensus specs trusted setup files.
@@ -29,11 +29,11 @@ pub struct TrustedSetup {
 }
 
 impl TrustedSetup {
-    pub fn g1_points(&self) -> Vec<[u8; BYTES_PER_G1_POINT]> {
+    pub fn g1_points(&self) -> Vec<[u8; BYTES_PER_G1]> {
         self.g1_points.iter().map(|p| p.0).collect()
     }
 
-    pub fn g2_points(&self) -> Vec<[u8; BYTES_PER_G2_POINT]> {
+    pub fn g2_points(&self) -> Vec<[u8; BYTES_PER_G2]> {
         self.g2_points.iter().map(|p| p.0).collect()
     }
 
@@ -85,14 +85,14 @@ impl<'de> Deserialize<'de> for G1Point {
             {
                 let point = hex::decode(strip_prefix(v))
                     .map_err(|e| de::Error::custom(format!("Failed to decode G1 point: {}", e)))?;
-                if point.len() != BYTES_PER_G1_POINT {
+                if point.len() != BYTES_PER_G1 {
                     return Err(de::Error::custom(format!(
                         "G1 point has invalid length. Expected {} got {}",
-                        BYTES_PER_G1_POINT,
+                        BYTES_PER_G1,
                         point.len()
                     )));
                 }
-                let mut res = [0; BYTES_PER_G1_POINT];
+                let mut res = [0; BYTES_PER_G1];
                 res.copy_from_slice(&point);
                 Ok(G1Point(res))
             }
@@ -121,14 +121,14 @@ impl<'de> Deserialize<'de> for G2Point {
             {
                 let point = hex::decode(strip_prefix(v))
                     .map_err(|e| de::Error::custom(format!("Failed to decode G2 point: {}", e)))?;
-                if point.len() != BYTES_PER_G2_POINT {
+                if point.len() != BYTES_PER_G2 {
                     return Err(de::Error::custom(format!(
                         "G2 point has invalid length. Expected {} got {}",
-                        BYTES_PER_G2_POINT,
+                        BYTES_PER_G2,
                         point.len()
                     )));
                 }
-                let mut res = [0; BYTES_PER_G2_POINT];
+                let mut res = [0; BYTES_PER_G2];
                 res.copy_from_slice(&point);
                 Ok(G2Point(res))
             }
@@ -143,7 +143,7 @@ where
     D: Deserializer<'de>,
 {
     let mut decoded: Vec<G1Point> = serde::de::Deserialize::deserialize(deserializer)?;
-    // FIELD_ELEMENTS_PER_BLOB is a compile time parameter that
+    // field_elements_per_blob is a compile time parameter that
     // depends on whether lighthouse is compiled with minimal or mainnet features.
     // Minimal and mainnet trusted setup parameters differ only by the
     // number of G1 points they contain.
@@ -151,7 +151,7 @@ where
     // Hence, we truncate the number of G1 points after deserialisation
     // to ensure that we have the right number of g1 points in the
     // trusted setup.
-    decoded.truncate(FIELD_ELEMENTS_PER_BLOB);
+    decoded.truncate(field_elements_per_blob());
     Ok(decoded)
 }
 

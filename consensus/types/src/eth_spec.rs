@@ -1,6 +1,6 @@
 use crate::*;
 
-use kzg::{BlobTrait, KzgPreset, MainnetKzgPreset, MainnetRustKzgPreset, MinimalKzgPreset};
+use kzg::{BlobTrait, KzgPreset, MainnetRustKzgPreset, MinimalKzgPreset};
 use safe_arith::SafeArith;
 use serde_derive::{Deserialize, Serialize};
 use ssz_types::typenum::{
@@ -388,7 +388,7 @@ impl EthSpec for MinimalEthSpec {
 pub struct GnosisEthSpec;
 
 impl EthSpec for GnosisEthSpec {
-    type Kzg = MainnetKzgPreset;
+    type Kzg = MainnetRustKzgPreset;
 
     type JustificationBitsLength = U4;
     type SubnetBitfieldLength = U64;
