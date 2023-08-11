@@ -5,7 +5,7 @@ use types::{Blob, EthSpec, Hash256, KzgCommitment, KzgProof};
 /// crypto library.
 fn ssz_blob_to_crypto_blob<T: EthSpec>(
     blob: Blob<T>,
-) -> Result<<<T as EthSpec>::Kzg as KzgPreset>::Blob, KzgError> {
+) -> Result<Box<<<T as EthSpec>::Kzg as KzgPreset>::Blob>, KzgError> {
     T::blob_from_bytes(blob.to_vec().as_slice())
 }
 
@@ -34,8 +34,9 @@ pub fn validate_blobs<T: EthSpec>(
         .iter()
         .map(|blob| ssz_blob_to_crypto_blob::<T>(blob.clone())) // Avoid this clone
         .collect::<Result<Vec<_>, KzgError>>()?;
+    let blobs_unboxed: Vec<_> = blobs.into_iter().map(|kzg_blob| *kzg_blob).collect();
 
-    kzg.verify_blob_kzg_proof_batch(&blobs, expected_kzg_commitments, kzg_proofs)
+    kzg.verify_blob_kzg_proof_batch(&blobs_unboxed, expected_kzg_commitments, kzg_proofs)
 }
 
 /// Compute the kzg proof given an ssz blob and its kzg commitment.
