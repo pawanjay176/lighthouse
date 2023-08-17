@@ -1,4 +1,4 @@
-use kzg::{Error as KzgError, Kzg, KzgPreset};
+use kzg::{Error as KzgError, Kzg, KzgPreset, MainnetBlob};
 use types::{Blob, EthSpec, Hash256, KzgCommitment, KzgProof};
 
 /// Converts a blob ssz List object to an array to be used with the kzg
@@ -23,7 +23,7 @@ pub fn validate_blob<T: EthSpec>(
     )?;
 
     let res2 = kzg.verify_blob_kzg_proof2(
-        ssz_blob_to_crypto_blob::<T>(blob)?,
+        MainnetBlob::from_bytes(blob.to_vec().as_slice()).unwrap(),
         kzg_commitment,
         kzg_proof,
     )?;
