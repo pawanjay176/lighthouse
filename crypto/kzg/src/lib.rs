@@ -99,6 +99,13 @@ pub trait KzgPreset:
         trusted_setup: &Self::KzgSettings,
     ) -> Result<bool, CryptoError>;
 
+    fn verify_blob_kzg_proof2(
+        blob: Box<Self::Blob>,
+        kzg_commitment: KzgCommitment,
+        kzg_proof: KzgProof,
+        trusted_setup: &Self::KzgSettings,
+    ) -> Result<bool, CryptoError>;
+
     fn verify_blob_kzg_proof_batch(
         blobs: &[Self::Blob],
         commitments_bytes: &[Self::Bytes48],
@@ -174,6 +181,21 @@ macro_rules! implement_kzg_preset {
                 trusted_setup: &Self::KzgSettings,
             ) -> Result<bool, CryptoError> {
                 $module_name::KzgProof::verify_blob_kzg_proof(
+                    blob,
+                    kzg_commitment.into(),
+                    kzg_proof.into(),
+                    trusted_setup,
+                )
+                .map_err(CryptoError::from)
+            }
+
+            fn verify_blob_kzg_proof2(
+                blob: Box<Self::Blob>,
+                kzg_commitment: KzgCommitment,
+                kzg_proof: KzgProof,
+                trusted_setup: &Self::KzgSettings,
+            ) -> Result<bool, CryptoError> {
+                $module_name::KzgProof::verify_blob_kzg_proof2(
                     blob,
                     kzg_commitment.into(),
                     kzg_proof.into(),
@@ -289,6 +311,17 @@ impl<P: KzgPreset> Kzg<P> {
         kzg_proof: KzgProof,
     ) -> Result<bool, Error> {
         P::verify_blob_kzg_proof(blob, kzg_commitment, kzg_proof, &self.trusted_setup)
+            .map_err(Error::InvalidKzgProof)
+    }
+
+    /// Verify a kzg proof given the blob, kzg commitment and kzg proof.
+    pub fn verify_blob_kzg_proof2(
+        &self,
+        blob: Box<P::Blob>,
+        kzg_commitment: KzgCommitment,
+        kzg_proof: KzgProof,
+    ) -> Result<bool, Error> {
+        P::verify_blob_kzg_proof2(blob, kzg_commitment, kzg_proof, &self.trusted_setup)
             .map_err(Error::InvalidKzgProof)
     }
 

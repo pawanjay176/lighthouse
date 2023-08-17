@@ -16,11 +16,21 @@ pub fn validate_blob<T: EthSpec>(
     kzg_commitment: KzgCommitment,
     kzg_proof: KzgProof,
 ) -> Result<bool, KzgError> {
-    kzg.verify_blob_kzg_proof(
+    let res1 = kzg.verify_blob_kzg_proof(
+        ssz_blob_to_crypto_blob::<T>(blob.clone())?,
+        kzg_commitment,
+        kzg_proof,
+    )?;
+
+    let res2 = kzg.verify_blob_kzg_proof2(
         ssz_blob_to_crypto_blob::<T>(blob)?,
         kzg_commitment,
         kzg_proof,
-    )
+    )?;
+
+    assert_eq!(res1, res2);
+    Ok(res1)
+
 }
 
 /// Validate a batch of blob-commitment-proof triplets from multiple `BlobSidecars`.
