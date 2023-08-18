@@ -90,13 +90,13 @@ pub trait KzgPreset:
     fn load_trusted_setup(trusted_setup: TrustedSetup) -> Result<Self::KzgSettings, CryptoError>;
 
     fn compute_blob_kzg_proof(
-        blob: Box<Self::Blob>,
+        blob: &Self::Blob,
         kzg_commitment: KzgCommitment,
         trusted_setup: &Self::KzgSettings,
     ) -> Result<KzgProof, CryptoError>;
 
     fn verify_blob_kzg_proof(
-        blob: Box<Self::Blob>,
+        blob: &Self::Blob,
         kzg_commitment: KzgCommitment,
         kzg_proof: KzgProof,
         trusted_setup: &Self::KzgSettings,
@@ -110,12 +110,12 @@ pub trait KzgPreset:
     ) -> Result<bool, CryptoError>;
 
     fn blob_to_kzg_commitment(
-        blob: Box<Self::Blob>,
+        blob: &Self::Blob,
         trusted_setup: &Self::KzgSettings,
     ) -> Result<KzgCommitment, CryptoError>;
 
     fn compute_kzg_proof(
-        blob: Box<Self::Blob>,
+        blob: &Self::Blob,
         z: Self::Bytes32,
         trusted_setup: &Self::KzgSettings,
     ) -> Result<(KzgProof, Self::Bytes32), CryptoError>;
@@ -157,7 +157,7 @@ macro_rules! implement_kzg_preset {
             }
 
             fn compute_blob_kzg_proof(
-                blob: Box<Self::Blob>,
+                blob: &Self::Blob,
                 kzg_commitment: KzgCommitment,
                 trusted_setup: &Self::KzgSettings,
             ) -> Result<KzgProof, CryptoError> {
@@ -171,7 +171,7 @@ macro_rules! implement_kzg_preset {
             }
 
             fn verify_blob_kzg_proof(
-                blob: Box<Self::Blob>,
+                blob: &Self::Blob,
                 kzg_commitment: KzgCommitment,
                 kzg_proof: KzgProof,
                 trusted_setup: &Self::KzgSettings,
@@ -201,7 +201,7 @@ macro_rules! implement_kzg_preset {
             }
 
             fn blob_to_kzg_commitment(
-                blob: Box<Self::Blob>,
+                blob: &Self::Blob,
                 trusted_setup: &Self::KzgSettings,
             ) -> Result<KzgCommitment, CryptoError> {
                 $module_name::KzgCommitment::blob_to_kzg_commitment(blob, trusted_setup)
@@ -210,7 +210,7 @@ macro_rules! implement_kzg_preset {
             }
 
             fn compute_kzg_proof(
-                blob: Box<Self::Blob>,
+                blob: &Self::Blob,
                 z: Self::Bytes32,
                 trusted_setup: &Self::KzgSettings,
             ) -> Result<(KzgProof, Self::Bytes32), CryptoError> {
@@ -283,7 +283,7 @@ impl<P: KzgPreset> Kzg<P> {
     /// Compute the kzg proof given a blob and its kzg commitment.
     pub fn compute_blob_kzg_proof(
         &self,
-        blob: Box<P::Blob>,
+        blob: &P::Blob,
         kzg_commitment: KzgCommitment,
     ) -> Result<KzgProof, Error> {
         P::compute_blob_kzg_proof(blob, kzg_commitment, &self.trusted_setup)
@@ -293,7 +293,7 @@ impl<P: KzgPreset> Kzg<P> {
     /// Verify a kzg proof given the blob, kzg commitment and kzg proof.
     pub fn verify_blob_kzg_proof(
         &self,
-        blob: Box<P::Blob>,
+        blob: &P::Blob,
         kzg_commitment: KzgCommitment,
         kzg_proof: KzgProof,
     ) -> Result<bool, Error> {
@@ -331,14 +331,14 @@ impl<P: KzgPreset> Kzg<P> {
     }
 
     /// Converts a blob to a kzg commitment.
-    pub fn blob_to_kzg_commitment(&self, blob: Box<P::Blob>) -> Result<KzgCommitment, Error> {
+    pub fn blob_to_kzg_commitment(&self, blob: &P::Blob) -> Result<KzgCommitment, Error> {
         P::blob_to_kzg_commitment(blob, &self.trusted_setup).map_err(Error::InvalidBlob)
     }
 
     /// Computes the kzg proof for a given `blob` and an evaluation point `z`
     pub fn compute_kzg_proof(
         &self,
-        blob: Box<P::Blob>,
+        blob: &P::Blob,
         z: Bytes32,
     ) -> Result<(KzgProof, Bytes32), Error> {
         P::compute_kzg_proof(blob, P::bytes32_in(z), &self.trusted_setup)
@@ -366,7 +366,7 @@ impl<P: KzgPreset> Kzg<P> {
 
     pub fn verify_blob_kzg_proof2(
         &self,
-        blob: Box<c_kzg::Blob>,
+        blob: &c_kzg::Blob,
         kzg_commitment: KzgCommitment,
         kzg_proof: KzgProof,
     ) -> Result<bool, Error> {
