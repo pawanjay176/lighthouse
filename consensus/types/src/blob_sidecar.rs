@@ -265,8 +265,8 @@ impl<T: EthSpec> BlobSidecar<T> {
         rng.fill_bytes(&mut blob_bytes);
         // Ensure that the blob is canonical by ensuring that
         // each field element contained in the blob is < BLS_MODULUS
-        for i in 0..T::Kzg::FIELD_ELEMENTS_PER_BLOB {
-            let Some(byte) = blob_bytes.get_mut(i.checked_mul(T::Kzg::BYTES_PER_FIELD_ELEMENT).ok_or("overflow".to_string())?)  else {
+        for i in 0..<T::Kzg as KzgPreset>::FIELD_ELEMENTS_PER_BLOB {
+            let Some(byte) = blob_bytes.get_mut(i.checked_mul(kzg::BYTES_PER_FIELD_ELEMENT).ok_or("overflow".to_string())?)  else {
                 return Err(format!("blob byte index out of bounds: {:?}", i));
             };
             *byte = 0;

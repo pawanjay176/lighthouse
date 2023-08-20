@@ -15,7 +15,6 @@ use beacon_chain::{
     ChainConfig, NotifyExecutionLayer, ServerSentEventHandler, WhenSlotSkipped,
 };
 use eth2_network_config::get_trusted_setup;
-use kzg::TrustedSetup;
 use lazy_static::lazy_static;
 use logging::test_logger;
 use maplit::hashset;
@@ -2118,10 +2117,7 @@ async fn weak_subjectivity_sync() {
     let store = get_store(&temp2);
     let spec = test_spec::<E>();
     let seconds_per_slot = spec.seconds_per_slot;
-    let trusted_setup: TrustedSetup =
-        serde_json::from_reader(get_trusted_setup::<<E as EthSpec>::Kzg>())
-            .map_err(|e| println!("Unable to read trusted setup file: {}", e))
-            .unwrap();
+    let trusted_setup = get_trusted_setup::<<E as EthSpec>::Kzg>().to_vec();
 
     let mock = mock_execution_layer_from_parts(
         &harness.spec,

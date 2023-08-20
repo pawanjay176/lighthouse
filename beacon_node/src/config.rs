@@ -2,7 +2,6 @@ use beacon_chain::chain_config::{
     DisallowedReOrgOffsets, ReOrgThreshold, DEFAULT_PREPARE_PAYLOAD_LOOKAHEAD_FACTOR,
     DEFAULT_RE_ORG_MAX_EPOCHS_SINCE_FINALIZATION, DEFAULT_RE_ORG_THRESHOLD,
 };
-use beacon_chain::TrustedSetup;
 use clap::ArgMatches;
 use clap_utils::flags::DISABLE_MALLOC_TUNING_FLAG;
 use clap_utils::parse_required;
@@ -385,11 +384,13 @@ pub fn get_config<E: EthSpec>(
     // Override default trusted setup file if required
     // TODO: consider removing this when we get closer to launch
     if let Some(trusted_setup_file_path) = cli_args.value_of("trusted-setup-file-override") {
-        let file = std::fs::File::open(trusted_setup_file_path)
+        use std::io::Read;
+        let mut file = std::fs::File::open(trusted_setup_file_path)
             .map_err(|e| format!("Failed to open trusted setup file: {}", e))?;
-        let trusted_setup: TrustedSetup = serde_json::from_reader(file)
+        let mut trusted_setup_bytes = Vec::new();
+        file.read_to_end(&mut trusted_setup_bytes)
             .map_err(|e| format!("Unable to read trusted setup file: {}", e))?;
-        client_config.trusted_setup = Some(trusted_setup);
+        client_config.trusted_setup = Some(trusted_setup_bytes);
     }
 
     if let Some(freezer_dir) = cli_args.value_of("freezer-dir") {

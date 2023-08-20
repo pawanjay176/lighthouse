@@ -28,7 +28,7 @@ use execution_layer::{
 use futures::channel::mpsc::Receiver;
 pub use genesis::{interop_genesis_state_with_eth1, DEFAULT_ETH1_BLOCK_HASH};
 use int_to_bytes::int_to_bytes32;
-use kzg::{Kzg, TrustedSetup};
+use kzg::Kzg;
 use merkle_proof::MerkleTree;
 use operation_pool::ReceivedPreCapella;
 use parking_lot::RwLockWriteGuard;
@@ -521,10 +521,7 @@ where
             .validator_keypairs
             .expect("cannot build without validator keypairs");
         let chain_config = self.chain_config.unwrap_or_default();
-        let trusted_setup: TrustedSetup =
-            serde_json::from_reader(eth2_network_config::get_trusted_setup::<E::Kzg>())
-                .map_err(|e| format!("Unable to read trusted setup file: {}", e))
-                .unwrap();
+        let trusted_setup = eth2_network_config::get_trusted_setup::<E::Kzg>().to_vec();
 
         let mut builder = BeaconChainBuilder::new(self.eth_spec_instance)
             .logger(log.clone())
@@ -601,11 +598,8 @@ pub fn mock_execution_layer_from_parts<T: EthSpec>(
         HARNESS_GENESIS_TIME + spec.seconds_per_slot * T::slots_per_epoch() * epoch.as_u64()
     });
 
-    let trusted_setup: TrustedSetup =
-        serde_json::from_reader(eth2_network_config::get_trusted_setup::<T::Kzg>())
-            .map_err(|e| format!("Unable to read trusted setup file: {}", e))
-            .expect("should have trusted setup");
-    let kzg = Kzg::new_from_trusted_setup(trusted_setup).expect("should create kzg");
+    let trusted_setup_bytes = eth2_network_config::get_trusted_setup::<T::Kzg>().to_vec();
+    let kzg = Kzg::new_from_trusted_setup(&trusted_setup_bytes).expect("should create kzg");
 
     MockExecutionLayer::new(
         task_executor,

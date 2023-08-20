@@ -2,16 +2,15 @@ use super::*;
 use crate::case_result::compare_result;
 use beacon_chain::kzg_utils::validate_blob;
 use eth2_network_config::get_trusted_setup;
-use kzg::{Kzg, KzgCommitment, KzgPreset, KzgProof, TrustedSetup};
+use kzg::{Kzg, KzgCommitment, KzgPreset, KzgProof};
 use serde_derive::Deserialize;
 use std::convert::TryInto;
 use std::marker::PhantomData;
 use types::Blob;
 
 pub fn get_kzg<P: KzgPreset>() -> Result<Kzg<P>, Error> {
-    let trusted_setup: TrustedSetup = serde_json::from_reader(get_trusted_setup::<P>())
-        .map_err(|e| Error::InternalError(format!("Failed to initialize kzg: {:?}", e)))?;
-    Kzg::new_from_trusted_setup(trusted_setup)
+    let trusted_setup_bytes = get_trusted_setup::<P>().to_vec();
+    Kzg::new_from_trusted_setup(&trusted_setup_bytes)
         .map_err(|e| Error::InternalError(format!("Failed to initialize kzg: {:?}", e)))
 }
 

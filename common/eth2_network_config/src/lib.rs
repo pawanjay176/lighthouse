@@ -13,7 +13,7 @@
 
 use discv5::enr::{CombinedKey, Enr};
 use eth2_config::{instantiate_hardcoded_nets, HardcodedNet};
-use kzg::{KzgPreset, KzgPresetId, TrustedSetup};
+use kzg::{KzgPreset, KzgPresetId};
 use std::fs::{create_dir_all, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -70,7 +70,7 @@ pub struct Eth2NetworkConfig {
     pub boot_enr: Option<Vec<Enr<CombinedKey>>>,
     pub genesis_state_bytes: Option<Vec<u8>>,
     pub config: Config,
-    pub kzg_trusted_setup: Option<TrustedSetup>,
+    pub kzg_trusted_setup: Option<Vec<u8>>,
 }
 
 impl Eth2NetworkConfig {
@@ -92,10 +92,8 @@ impl Eth2NetworkConfig {
             // Only load the trusted setup if the deneb fork epoch is set
             if epoch.value != Epoch::max_value() {
                 let trusted_setup_bytes =
-                    get_trusted_setup_from_id(KzgPresetId::from_str(&config.preset_base)?);
-                let trusted_setup: TrustedSetup = serde_json::from_reader(trusted_setup_bytes)
-                    .map_err(|e| format!("Unable to read trusted setup file: {}", e))?;
-                Some(trusted_setup)
+                    get_trusted_setup_from_id(KzgPresetId::from_str(&config.preset_base)?).to_vec();
+                Some(trusted_setup_bytes)
             } else {
                 None
             }
@@ -259,10 +257,8 @@ impl Eth2NetworkConfig {
         let kzg_trusted_setup = if let Some(epoch) = config.deneb_fork_epoch {
             // Only load the trusted setup if the deneb fork epoch is set
             if epoch.value != Epoch::max_value() {
-                let trusted_setup: TrustedSetup = serde_json::from_reader(
-                    get_trusted_setup_from_id(KzgPresetId::from_str(&config.preset_base)?),
-                )
-                .map_err(|e| format!("Unable to read trusted setup file: {}", e))?;
+                let trusted_setup =
+                    get_trusted_setup_from_id(KzgPresetId::from_str(&config.preset_base)?).to_vec();
                 Some(trusted_setup)
             } else {
                 None

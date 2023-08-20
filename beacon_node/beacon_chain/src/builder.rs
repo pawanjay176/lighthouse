@@ -21,7 +21,7 @@ use eth1::Config as Eth1Config;
 use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
 use futures::channel::mpsc::Sender;
-use kzg::{Kzg, TrustedSetup};
+use kzg::Kzg;
 use operation_pool::{OperationPool, PersistedOperationPool};
 use parking_lot::RwLock;
 use proto_array::{DisallowedReOrgOffsets, ReOrgThreshold};
@@ -96,7 +96,7 @@ pub struct BeaconChainBuilder<T: BeaconChainTypes> {
     // Pending I/O batch that is constructed during building and should be executed atomically
     // alongside `PersistedBeaconChain` storage when `BeaconChainBuilder::build` is called.
     pending_io_batch: Vec<KeyValueStoreOp>,
-    trusted_setup: Option<TrustedSetup>,
+    trusted_setup: Option<Vec<u8>>,
     task_executor: Option<TaskExecutor>,
 }
 
@@ -596,7 +596,7 @@ where
         self
     }
 
-    pub fn trusted_setup(mut self, trusted_setup: TrustedSetup) -> Self {
+    pub fn trusted_setup(mut self, trusted_setup: Vec<u8>) -> Self {
         self.trusted_setup = Some(trusted_setup);
         self
     }
@@ -642,8 +642,8 @@ where
             slot_clock.now().ok_or("Unable to read slot")?
         };
 
-        let kzg = if let Some(trusted_setup) = self.trusted_setup {
-            let kzg = Kzg::new_from_trusted_setup(trusted_setup)
+        let kzg = if let Some(trusted_setup_bytes) = self.trusted_setup {
+            let kzg = Kzg::new_from_trusted_setup(&trusted_setup_bytes)
                 .map_err(|e| format!("Failed to load trusted setup: {:?}", e))?;
             let kzg_arc = Arc::new(kzg);
             Some(kzg_arc)

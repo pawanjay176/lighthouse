@@ -1,5 +1,4 @@
 use beacon_chain::validator_monitor::DEFAULT_INDIVIDUAL_TRACKING_THRESHOLD;
-use beacon_chain::TrustedSetup;
 use beacon_processor::BeaconProcessorConfig;
 use directory::DEFAULT_ROOT_DIR;
 use environment::LoggerConfig;
@@ -83,7 +82,7 @@ pub struct Config {
     pub chain: beacon_chain::ChainConfig,
     pub eth1: eth1::Config,
     pub execution_layer: Option<execution_layer::Config>,
-    pub trusted_setup: Option<TrustedSetup>,
+    pub trusted_setup: Option<Vec<u8>>,
     pub http_api: http_api::Config,
     pub http_metrics: http_metrics::Config,
     pub monitoring_api: Option<monitoring_api::Config>,

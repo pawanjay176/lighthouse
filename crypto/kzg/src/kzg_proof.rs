@@ -1,4 +1,4 @@
-use c_kzg::BYTES_PER_PROOF;
+use kzg_rust::BYTES_PER_PROOF;
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
 use ssz_derive::{Decode, Encode};
@@ -11,18 +11,17 @@ use tree_hash::{PackedEncoding, TreeHash};
 #[ssz(struct_behaviour = "transparent")]
 pub struct KzgProof(pub [u8; BYTES_PER_PROOF]);
 
-impl From<KzgProof> for c_kzg::Bytes48 {
+impl From<KzgProof> for kzg_rust::Bytes48 {
     fn from(value: KzgProof) -> Self {
         value.0.into()
     }
 }
 
-impl From<KzgProof> for c_kzg_min::Bytes48 {
+impl From<KzgProof> for kzg_rust::KzgProof {
     fn from(value: KzgProof) -> Self {
-        value.0.into()
+        kzg_rust::KzgProof(value.0.into())
     }
 }
-
 impl KzgProof {
     pub fn empty() -> Self {
         let mut bytes = [0; BYTES_PER_PROOF];

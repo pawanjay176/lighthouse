@@ -697,27 +697,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bindgen"
-version = "0.64.0"
-source = "git+https://github.com/rust-lang/rust-bindgen?rev=0de11f0a521611ac8738b7b01d19dddaf3899e66#0de11f0a521611ac8738b7b01d19dddaf3899e66"
-dependencies = [
- "bitflags 1.3.2",
- "cexpr",
- "clang-sys",
- "lazy_static",
- "lazycell",
- "log",
- "peeking_take_while",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash",
- "shlex",
- "syn 2.0.28",
- "which",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -808,14 +787,13 @@ dependencies = [
 
 [[package]]
 name = "blst"
-version = "0.3.10"
+version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a30d0edd9dd1c60ddb42b80341c7852f6f985279a5c1a83659dcb65899dec99"
+checksum = "c94087b935a822949d3291a9989ad2b2051ea141eda0fd4e478a75f6aa3e604b"
 dependencies = [
  "cc",
  "glob",
  "threadpool",
- "which",
  "zeroize",
 ]
 
@@ -939,32 +917,6 @@ dependencies = [
  "cc",
  "libc",
  "pkg-config",
-]
-
-[[package]]
-name = "c-kzg"
-version = "0.1.0"
-source = "git+https://github.com/ethereum//c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92#13cec820c08f45318f82ed4e0da0300042758b92"
-dependencies = [
- "bindgen 0.64.0",
- "cc",
- "glob",
- "hex",
- "libc",
- "serde",
-]
-
-[[package]]
-name = "c-kzg"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92#13cec820c08f45318f82ed4e0da0300042758b92"
-dependencies = [
- "bindgen 0.64.0",
- "cc",
- "glob",
- "hex",
- "libc",
- "serde",
 ]
 
 [[package]]
@@ -2319,7 +2271,6 @@ dependencies = [
  "eth2_config",
  "ethereum_ssz",
  "kzg",
- "serde_json",
  "serde_yaml",
  "tempfile",
  "types",
@@ -3952,17 +3903,28 @@ name = "kzg"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
- "c-kzg 0.1.0 (git+https://github.com/ethereum//c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92)",
- "c-kzg 0.1.0 (git+https://github.com/ethereum/c-kzg-4844?rev=13cec820c08f45318f82ed4e0da0300042758b92)",
  "derivative",
  "ethereum_hashing",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "hex",
+ "kzg_rust",
  "serde",
  "serde_derive",
+ "serde_json",
  "tree_hash",
+]
+
+[[package]]
+name = "kzg_rust"
+version = "0.1.0"
+source = "git+https://github.com/pawanjay176/kzg_rust?branch=const-generics#a545800e35fb8494a433b66f872d2dca0286475e"
+dependencies = [
+ "blst",
+ "hex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4833,7 +4795,7 @@ name = "mdbx-sys"
 version = "0.11.6-4"
 source = "git+https://github.com/sigp/libmdbx-rs?tag=v0.1.4#096da80a83d14343f8df833006483f48075cd135"
 dependencies = [
- "bindgen 0.59.2",
+ "bindgen",
  "cc",
  "cmake",
  "libc",
@@ -9204,17 +9166,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b03058f88386e5ff5310d9111d53f48b17d732b401aeb83a8d5190f2ac459338"
 dependencies = [
  "rustls-webpki 0.100.1",
-]
-
-[[package]]
-name = "which"
-version = "4.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2441c784c52b289a054b7201fc93253e288f094e2f4be9058343127c4226a269"
-dependencies = [
- "either",
- "libc",
- "once_cell",
 ]
 
 [[package]]
