@@ -476,7 +476,7 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     /// The slot at which blocks are downloaded back to.
     pub genesis_backfill_slot: Slot,
     pub data_availability_checker: Arc<DataAvailabilityChecker<T>>,
-    pub kzg: Option<Arc<Kzg<<T::EthSpec as EthSpec>::Kzg>>>,
+    pub kzg: Option<Arc<Kzg>>,
 }
 
 type BeaconBlockAndState<T, Payload> = (

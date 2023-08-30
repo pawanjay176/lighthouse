@@ -17,12 +17,6 @@ impl From<KzgProof> for c_kzg::Bytes48 {
     }
 }
 
-impl From<KzgProof> for c_kzg_min::Bytes48 {
-    fn from(value: KzgProof) -> Self {
-        value.0.into()
-    }
-}
-
 impl KzgProof {
     pub fn empty() -> Self {
         let mut bytes = [0; BYTES_PER_PROOF];

@@ -13,7 +13,7 @@
 
 use discv5::enr::{CombinedKey, Enr};
 use eth2_config::{instantiate_hardcoded_nets, HardcodedNet};
-use kzg::{KzgPreset, KzgPresetId, TrustedSetup};
+use kzg::{KzgPresetId, TrustedSetup};
 use std::fs::{create_dir_all, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -45,12 +45,6 @@ const TRUSTED_SETUP: &[u8] =
 const TRUSTED_SETUP_MINIMAL: &[u8] =
     include_bytes!("../built_in_network_configs/minimal_testing_trusted_setups.json");
 
-pub fn get_trusted_setup<P: KzgPreset>() -> &'static [u8] {
-    match P::spec_name() {
-        KzgPresetId::Mainnet => TRUSTED_SETUP,
-        KzgPresetId::Minimal => TRUSTED_SETUP_MINIMAL,
-    }
-}
 
 pub fn get_trusted_setup_from_id(id: KzgPresetId) -> &'static [u8] {
     match id {

@@ -1,6 +1,6 @@
 use crate::*;
 
-use kzg::{BlobTrait, KzgPreset, MainnetKzgPreset, MinimalKzgPreset};
+use kzg::KzgPresetId;
 use safe_arith::SafeArith;
 use serde_derive::{Deserialize, Serialize};
 use ssz_types::typenum::{
@@ -52,8 +52,6 @@ impl fmt::Display for EthSpecId {
 pub trait EthSpec:
     'static + Default + Sync + Send + Clone + Debug + PartialEq + Eq + for<'a> arbitrary::Arbitrary<'a>
 {
-    type Kzg: KzgPreset;
-
     /*
      * Constants
      */
@@ -136,6 +134,8 @@ pub trait EthSpec:
     type BytesPerBlob: Unsigned + Clone + Sync + Send + Debug + PartialEq;
 
     fn default_spec() -> ChainSpec;
+
+    fn kzg_preset_id() -> KzgPresetId;
 
     fn spec_name() -> EthSpecId;
 
@@ -260,10 +260,6 @@ pub trait EthSpec:
         Self::MaxBlobsPerBlock::to_usize()
     }
 
-    fn blob_from_bytes(bytes: &[u8]) -> Result<<Self::Kzg as KzgPreset>::Blob, kzg::Error> {
-        <Self::Kzg as KzgPreset>::Blob::from_bytes(bytes)
-    }
-
     /// Returns the `BYTES_PER_BLOB` constant for this specification.
     fn bytes_per_blob() -> usize {
         Self::BytesPerBlob::to_usize()
@@ -283,8 +279,6 @@ macro_rules! params_from_eth_spec {
 pub struct MainnetEthSpec;
 
 impl EthSpec for MainnetEthSpec {
-    type Kzg = MainnetKzgPreset;
-
     type JustificationBitsLength = U4;
     type SubnetBitfieldLength = U64;
     type MaxValidatorsPerCommittee = U2048;
@@ -327,6 +321,10 @@ impl EthSpec for MainnetEthSpec {
     fn spec_name() -> EthSpecId {
         EthSpecId::Mainnet
     }
+
+    fn kzg_preset_id() -> KzgPresetId {
+        KzgPresetId::Mainnet
+    }
 }
 
 /// Ethereum Foundation minimal spec, as defined in the eth2.0-specs repo.
@@ -334,8 +332,6 @@ impl EthSpec for MainnetEthSpec {
 pub struct MinimalEthSpec;
 
 impl EthSpec for MinimalEthSpec {
-    type Kzg = MinimalKzgPreset;
-
     type SlotsPerEpoch = U8;
     type EpochsPerEth1VotingPeriod = U4;
     type SlotsPerHistoricalRoot = U64;
@@ -381,6 +377,10 @@ impl EthSpec for MinimalEthSpec {
     fn spec_name() -> EthSpecId {
         EthSpecId::Minimal
     }
+
+    fn kzg_preset_id() -> KzgPresetId {
+        KzgPresetId::Minimal
+    }
 }
 
 /// Gnosis Beacon Chain specifications.
@@ -388,8 +388,6 @@ impl EthSpec for MinimalEthSpec {
 pub struct GnosisEthSpec;
 
 impl EthSpec for GnosisEthSpec {
-    type Kzg = MainnetKzgPreset;
-
     type JustificationBitsLength = U4;
     type SubnetBitfieldLength = U64;
     type MaxValidatorsPerCommittee = U2048;
@@ -431,5 +429,9 @@ impl EthSpec for GnosisEthSpec {
 
     fn spec_name() -> EthSpecId {
         EthSpecId::Gnosis
+    }
+
+    fn kzg_preset_id() -> KzgPresetId {
+        KzgPresetId::Mainnet
     }
 }

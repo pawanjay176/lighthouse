@@ -130,7 +130,7 @@ pub struct ExecutionBlockGenerator<T: EthSpec> {
      * deneb stuff
      */
     pub blobs_bundles: HashMap<PayloadId, BlobsBundle<T>>,
-    pub kzg: Option<Arc<Kzg<T::Kzg>>>,
+    pub kzg: Option<Arc<Kzg>>,
 }
 
 impl<T: EthSpec> ExecutionBlockGenerator<T> {
@@ -140,7 +140,7 @@ impl<T: EthSpec> ExecutionBlockGenerator<T> {
         terminal_block_hash: ExecutionBlockHash,
         shanghai_time: Option<u64>,
         cancun_time: Option<u64>,
-        kzg: Option<Kzg<T::Kzg>>,
+        kzg: Option<Kzg>,
     ) -> Self {
         let mut gen = Self {
             head_block: <_>::default(),
@@ -630,7 +630,7 @@ impl<T: EthSpec> ExecutionBlockGenerator<T> {
 
 pub fn generate_random_blobs<T: EthSpec>(
     n_blobs: usize,
-    kzg: &Kzg<T::Kzg>,
+    kzg: &Kzg,
 ) -> Result<(BlobsBundle<T>, Transactions<T>), String> {
     let mut bundle = BlobsBundle::<T>::default();
     let mut transactions = vec![];
