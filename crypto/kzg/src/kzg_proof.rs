@@ -11,13 +11,25 @@ use tree_hash::{PackedEncoding, TreeHash};
 #[ssz(struct_behaviour = "transparent")]
 pub struct KzgProof(pub [u8; BYTES_PER_PROOF]);
 
-impl From<KzgProof> for c_kzg::Bytes48 {
+impl From<&KzgProof> for c_kzg::KzgProof {
+    fn from(value: &KzgProof) -> Self {
+        value.0.into()
+    }
+}
+
+impl From<&KzgProof> for c_kzg_min::KzgProof {
+    fn from(value: &KzgProof) -> Self {
+        value.0.into()
+    }
+}
+
+impl From<KzgProof> for c_kzg::KzgProof {
     fn from(value: KzgProof) -> Self {
         value.0.into()
     }
 }
 
-impl From<KzgProof> for c_kzg_min::Bytes48 {
+impl From<KzgProof> for c_kzg_min::KzgProof {
     fn from(value: KzgProof) -> Self {
         value.0.into()
     }

@@ -2,7 +2,7 @@ use crate::test_utils::TestRandom;
 use crate::{Blob, ChainSpec, Domain, EthSpec, Fork, Hash256, SignedBlobSidecar, SignedRoot, Slot};
 use bls::SecretKey;
 use derivative::Derivative;
-use kzg::{Kzg, KzgCommitment, KzgPreset, KzgProof};
+use kzg::{Kzg, KzgCommitment, KzgPreset, KzgProof, BYTES_PER_FIELD_ELEMENT};
 use rand::Rng;
 use serde_derive::{Deserialize, Serialize};
 use ssz::Encode;
@@ -130,7 +130,7 @@ impl<T: EthSpec> BlobSidecar<T> {
         // each field element contained in the blob is < BLS_MODULUS
         for i in 0..T::Kzg::FIELD_ELEMENTS_PER_BLOB {
             let Some(byte) = blob_bytes.get_mut(
-                i.checked_mul(T::Kzg::BYTES_PER_FIELD_ELEMENT)
+                i.checked_mul(BYTES_PER_FIELD_ELEMENT)
                     .ok_or("overflow".to_string())?,
             ) else {
                 return Err(format!("blob byte index out of bounds: {:?}", i));
@@ -143,11 +143,11 @@ impl<T: EthSpec> BlobSidecar<T> {
         let kzg_blob = T::blob_from_bytes(&blob).unwrap();
 
         let commitment = kzg
-            .blob_to_kzg_commitment(kzg_blob.clone())
+            .blob_to_kzg_commitment(&kzg_blob)
             .map_err(|e| format!("error computing kzg commitment: {:?}", e))?;
 
         let proof = kzg
-            .compute_blob_kzg_proof(kzg_blob, commitment)
+            .compute_blob_kzg_proof(&kzg_blob, commitment)
             .map_err(|e| format!("error computing kzg proof: {:?}", e))?;
 
         Ok(Self {
