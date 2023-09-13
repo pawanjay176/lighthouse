@@ -998,6 +998,11 @@ lazy_static! {
         "beacon_blobs_sidecar_gossip_verification_seconds",
         "Full runtime of blob sidecars gossip verification"
     );
+    pub static ref BLOBS_COUNT: Result<Histogram> = try_create_histogram_with_buckets(
+        "beacon_blobs_count",
+        "The number of blobs in a block",
+        Ok(vec![0_f64, 1_f64, 3_f64, 4_f64, 5_f64, 6_f64])
+    );
 }
 
 // Fifth lazy-static block is used to account for macro recursion limit.

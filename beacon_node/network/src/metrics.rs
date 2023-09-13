@@ -319,6 +319,13 @@ lazy_static! {
         "Count of times when a gossip blob arrived from the network later than the attestation deadline.",
     );
 
+
+    pub static ref RPC_BLOB_COUNT: Result<Histogram> = try_create_histogram_with_buckets(
+        "rpc_beacon_blobs",
+        "Count of number of blobs that were fetched over rpc",
+        Ok(vec![0_f64, 1_f64, 3_f64, 4_f64, 5_f64, 6_f64])
+    );
+
     /*
      * Light client update reprocessing queue metrics.
      */

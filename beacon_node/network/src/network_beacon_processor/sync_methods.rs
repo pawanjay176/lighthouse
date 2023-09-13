@@ -286,6 +286,9 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             return;
         };
 
+        let blob_count = blobs.into_iter().filter(|blob| blob.is_some()).count();
+        metrics::observe(&metrics::RPC_BLOB_COUNT, blob_count as f64);
+
         let result = self
             .chain
             .check_rpc_blob_availability_and_import(slot, block_root, blobs)

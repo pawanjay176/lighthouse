@@ -3346,6 +3346,15 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         metrics::inc_counter(&metrics::BLOCK_PROCESSING_SUCCESSES);
 
+        if block.slot() + 2 * T::EthSpec::slots_per_epoch() >= current_slot {
+            let blob_count = block
+                .body()
+                .blob_kzg_commitments()
+                .map(|c| c.len())
+                .unwrap_or(0);
+            metrics::observe(&metrics::BLOBS_COUNT, blob_count as f64);
+        }
+
         // Update the deposit contract cache.
         self.import_block_update_deposit_contract_finalization(
             block,
