@@ -471,6 +471,7 @@ pub fn gossipsub_config(
         .mesh_n_high(load.mesh_n_high)
         .gossip_lazy(load.gossip_lazy)
         .fanout_ttl(Duration::from_secs(60))
+        .flood_publish(false)
         .history_length(12)
         .max_messages_per_rpc(Some(500)) // Responses to IWANT can be quite large
         .history_gossip(load.history_gossip)
