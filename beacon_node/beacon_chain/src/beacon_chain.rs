@@ -67,7 +67,7 @@ use crate::validator_monitor::{
 };
 use crate::validator_pubkey_cache::ValidatorPubkeyCache;
 use crate::{
-    kzg_utils, metrics, AvailabilityPendingExecutedBlock, BeaconChainError, BeaconForkChoiceStore,
+    metrics, AvailabilityPendingExecutedBlock, BeaconChainError, BeaconForkChoiceStore,
     BeaconSnapshot, CachedHead,
 };
 use eth2::types::{EventKind, SseBlock, SseExtendedPayloadAttributes, SyncDuty};
@@ -82,7 +82,6 @@ use fork_choice::{
 use futures::channel::mpsc::Sender;
 use itertools::process_results;
 use itertools::Itertools;
-use kzg::Kzg;
 use operation_pool::{AttestationRef, OperationPool, PersistedOperationPool, ReceivedPreCapella};
 use parking_lot::{Mutex, RwLock};
 use proto_array::{DoNotReOrg, ProposerHeadError};
@@ -121,6 +120,7 @@ use tree_hash::TreeHash;
 use types::beacon_state::CloneConfig;
 use types::blob_sidecar::{BlobSidecarList, FixedBlobSidecarList};
 use types::sidecar::BlobItems;
+use types::Kzg;
 use types::*;
 
 pub type ForkChoiceError = fork_choice::Error<crate::ForkChoiceStoreError>;
@@ -481,7 +481,7 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     /// they are collected and combined.
     pub data_availability_checker: Arc<DataAvailabilityChecker<T>>,
     /// The KZG trusted setup used by this chain.
-    pub kzg: Option<Arc<Kzg>>,
+    pub kzg: Option<Arc<Kzg<T::EthSpec>>>,
 }
 
 type BeaconBlockAndState<T, Payload> = (
@@ -5102,10 +5102,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         .kzg
                         .as_ref()
                         .ok_or(BlockProductionError::TrustedSetupNotInitialized)?;
-                    kzg_utils::validate_blobs::<T::EthSpec>(
-                        kzg,
+                    kzg.verify_blob_kzg_proof_batch(
+                        blobs.as_ref(),
                         expected_kzg_commitments,
-                        blobs,
                         &kzg_proofs,
                     )
                     .map_err(BlockProductionError::KzgError)?;

@@ -5,11 +5,11 @@ use crate::{
     },
     Config, *,
 };
-use kzg::Kzg;
 use sensitive_url::SensitiveUrl;
 use task_executor::TaskExecutor;
 use tempfile::NamedTempFile;
 use tree_hash::TreeHash;
+use types::Kzg;
 use types::{Address, ChainSpec, Epoch, EthSpec, FullPayload, Hash256, MainnetEthSpec};
 
 pub struct MockExecutionLayer<T: EthSpec> {
@@ -46,7 +46,7 @@ impl<T: EthSpec> MockExecutionLayer<T> {
         builder_threshold: Option<u128>,
         jwt_key: Option<JwtKey>,
         spec: ChainSpec,
-        kzg: Option<Kzg>,
+        kzg: Option<Kzg<T>>,
     ) -> Self {
         let handle = executor.handle().unwrap();
 

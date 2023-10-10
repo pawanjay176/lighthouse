@@ -28,7 +28,7 @@ use execution_layer::{
 use futures::channel::mpsc::Receiver;
 pub use genesis::{interop_genesis_state_with_eth1, DEFAULT_ETH1_BLOCK_HASH};
 use int_to_bytes::int_to_bytes32;
-use kzg::{Kzg, TrustedSetup};
+use kzg::TrustedSetup;
 use merkle_proof::MerkleTree;
 use operation_pool::ReceivedPreCapella;
 use parking_lot::RwLockWriteGuard;
@@ -61,6 +61,7 @@ use tree_hash::TreeHash;
 use types::sync_selection_proof::SyncSelectionProof;
 pub use types::test_utils::generate_deterministic_keypairs;
 use types::test_utils::TestRandom;
+use types::Kzg;
 use types::{typenum::U4294967296, *};
 
 // 4th September 2019
@@ -2526,7 +2527,7 @@ pub enum NumBlobs {
 pub fn generate_rand_block_and_blobs<E: EthSpec>(
     fork_name: ForkName,
     num_blobs: NumBlobs,
-    kzg: &Kzg,
+    kzg: &Kzg<E>,
     rng: &mut impl Rng,
 ) -> (SignedBeaconBlock<E, FullPayload<E>>, Vec<BlobSidecar<E>>) {
     let inner = map_fork_name!(fork_name, BeaconBlock, <_>::random_for_test(rng));

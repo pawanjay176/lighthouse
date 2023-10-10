@@ -8,7 +8,6 @@ use bytes::Bytes;
 use environment::null_logger;
 use execution_block_generator::PoWBlock;
 use handle_rpc::handle_rpc;
-use kzg::Kzg;
 use parking_lot::{Mutex, RwLock, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,6 +19,7 @@ use std::marker::PhantomData;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::{runtime, sync::oneshot};
+use types::Kzg;
 use types::{EthSpec, ExecutionBlockHash, Uint256};
 use warp::{http::StatusCode, Filter, Rejection};
 
@@ -107,7 +107,7 @@ impl<T: EthSpec> MockServer<T> {
     pub fn new_with_config(
         handle: &runtime::Handle,
         config: MockExecutionConfig,
-        kzg: Option<Kzg>,
+        kzg: Option<Kzg<T>>,
     ) -> Self {
         let MockExecutionConfig {
             jwt_key,
@@ -188,7 +188,7 @@ impl<T: EthSpec> MockServer<T> {
         terminal_block_hash: ExecutionBlockHash,
         shanghai_time: Option<u64>,
         cancun_time: Option<u64>,
-        kzg: Option<Kzg>,
+        kzg: Option<Kzg<T>>,
     ) -> Self {
         Self::new_with_config(
             handle,

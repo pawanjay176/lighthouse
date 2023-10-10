@@ -9,7 +9,6 @@ use crate::{
     static_valid_tx, ExecutionBlockWithTransactions,
 };
 use eth2::types::BlobsBundle;
-use kzg::Kzg;
 use parking_lot::Mutex;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -17,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
+use types::Kzg;
 use types::{
     BlobSidecar, ChainSpec, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella,
     ExecutionPayloadDeneb, ExecutionPayloadHeader, ExecutionPayloadMerge, ForkName, Hash256,
@@ -131,7 +131,7 @@ pub struct ExecutionBlockGenerator<T: EthSpec> {
      * deneb stuff
      */
     pub blobs_bundles: HashMap<PayloadId, BlobsBundle<T>>,
-    pub kzg: Option<Arc<Kzg>>,
+    pub kzg: Option<Arc<Kzg<T>>>,
     rng: Arc<Mutex<StdRng>>,
 }
 
@@ -148,7 +148,7 @@ impl<T: EthSpec> ExecutionBlockGenerator<T> {
         terminal_block_hash: ExecutionBlockHash,
         shanghai_time: Option<u64>,
         cancun_time: Option<u64>,
-        kzg: Option<Kzg>,
+        kzg: Option<Kzg<T>>,
     ) -> Self {
         let mut gen = Self {
             head_block: <_>::default(),
@@ -645,7 +645,7 @@ impl<T: EthSpec> ExecutionBlockGenerator<T> {
 
 pub fn generate_random_blobs<T: EthSpec, R: Rng>(
     n_blobs: usize,
-    kzg: &Kzg,
+    kzg: &Kzg<T>,
     rng: &mut R,
 ) -> Result<(BlobsBundle<T>, Transactions<T>), String> {
     let mut bundle = BlobsBundle::<T>::default();

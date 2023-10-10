@@ -102,6 +102,10 @@ pub mod blob_sidecar;
 pub mod sidecar;
 pub mod signed_blob;
 
+mod kzg;
+
+pub use kzg::*;
+
 use ethereum_types::{H160, H256};
 
 pub use crate::aggregate_and_proof::AggregateAndProof;

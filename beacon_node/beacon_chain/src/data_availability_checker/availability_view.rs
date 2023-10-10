@@ -267,11 +267,12 @@ pub mod tests {
     use crate::PayloadVerificationOutcome;
     use eth2_network_config::get_trusted_setup;
     use fork_choice::PayloadVerificationStatus;
-    use kzg::{Kzg, TrustedSetup};
+    use kzg::TrustedSetup;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
     use state_processing::ConsensusContext;
     use types::test_utils::TestRandom;
+    use types::Kzg;
     use types::{BeaconState, ChainSpec, ForkName, MainnetEthSpec, Slot};
 
     type E = MainnetEthSpec;

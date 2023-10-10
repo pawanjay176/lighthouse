@@ -1,6 +1,5 @@
 use super::*;
 use crate::case_result::compare_result;
-use beacon_chain::kzg_utils::verify_kzg_proof;
 use serde_derive::Deserialize;
 use std::marker::PhantomData;
 
@@ -44,7 +43,7 @@ impl<E: EthSpec> Case for KZGVerifyKZGProof<E> {
 
         let kzg = get_kzg::<E>()?;
         let result = parse_input(&self.input).and_then(|(commitment, z, y, proof)| {
-            verify_kzg_proof::<E>(&kzg, commitment, proof, z, y)
+            kzg.verify_kzg_proof(commitment, z, y, proof)
                 .map_err(|e| Error::InternalError(format!("Failed to validate proof: {:?}", e)))
         });
 

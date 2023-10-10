@@ -1,6 +1,5 @@
 use super::*;
 use crate::case_result::compare_result;
-use beacon_chain::kzg_utils::compute_kzg_proof;
 use kzg::KzgProof;
 use serde_derive::Deserialize;
 use std::marker::PhantomData;
@@ -48,7 +47,7 @@ impl<E: EthSpec> Case for KZGComputeKZGProof<E> {
 
         let kzg = get_kzg::<E>()?;
         let proof = parse_input(&self.input).and_then(|(blob, z)| {
-            compute_kzg_proof::<E>(&kzg, &blob, z)
+            kzg.compute_kzg_proof(&blob, z)
                 .map_err(|e| Error::InternalError(format!("Failed to compute kzg proof: {:?}", e)))
         });
 

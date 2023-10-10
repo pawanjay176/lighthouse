@@ -9,7 +9,6 @@ pub use crate::data_availability_checker::child_components::ChildComponents;
 use crate::data_availability_checker::overflow_lru_cache::OverflowLRUCache;
 use crate::data_availability_checker::processing_cache::ProcessingCache;
 use crate::{BeaconChain, BeaconChainTypes, BeaconStore};
-use kzg::Kzg;
 use kzg::{Error as KzgError, KzgCommitment};
 use parking_lot::RwLock;
 pub use processing_cache::ProcessingComponents;
@@ -25,6 +24,7 @@ use task_executor::TaskExecutor;
 use types::beacon_block_body::{KzgCommitmentOpts, KzgCommitments};
 use types::blob_sidecar::{BlobIdentifier, BlobSidecar, FixedBlobSidecarList};
 use types::consts::deneb::MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS;
+use types::Kzg;
 use types::{BlobSidecarList, ChainSpec, Epoch, EthSpec, Hash256, SignedBeaconBlock, Slot};
 
 mod availability_view;
@@ -87,7 +87,7 @@ pub struct DataAvailabilityChecker<T: BeaconChainTypes> {
     availability_cache: Arc<OverflowLRUCache<T>>,
     slot_clock: T::SlotClock,
     log: Logger,
-    kzg: Option<Arc<Kzg>>,
+    kzg: Option<Arc<Kzg<T::EthSpec>>>,
     spec: ChainSpec,
 }
 
@@ -115,7 +115,7 @@ impl<T: EthSpec> Debug for Availability<T> {
 impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
     pub fn new(
         slot_clock: T::SlotClock,
-        kzg: Option<Arc<Kzg>>,
+        kzg: Option<Arc<Kzg<T::EthSpec>>>,
         store: BeaconStore<T>,
         log: &Logger,
         spec: ChainSpec,

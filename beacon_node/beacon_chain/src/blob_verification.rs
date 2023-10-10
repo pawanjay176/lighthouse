@@ -8,14 +8,13 @@ use crate::beacon_chain::{
 };
 use crate::block_verification::cheap_state_advance_to_obtain_committees;
 use crate::data_availability_checker::AvailabilityCheckError;
-use crate::kzg_utils::{validate_blob, validate_blobs};
 use crate::{metrics, BeaconChainError};
-use kzg::Kzg;
 use slog::{debug, warn};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use tree_hash::TreeHash;
 use types::blob_sidecar::BlobIdentifier;
+use types::Kzg;
 use types::{
     BeaconStateError, BlobSidecar, BlobSidecarList, CloneConfig, EthSpec, Hash256,
     SignedBlobSidecar, Slot,
@@ -493,11 +492,12 @@ impl<T: EthSpec> KzgVerifiedBlob<T> {
 /// Returns an error if the kzg verification check fails.
 pub fn verify_kzg_for_blob<T: EthSpec>(
     blob: Arc<BlobSidecar<T>>,
-    kzg: &Kzg,
+    kzg: &Kzg<T>,
 ) -> Result<KzgVerifiedBlob<T>, AvailabilityCheckError> {
     let _timer = crate::metrics::start_timer(&crate::metrics::KZG_VERIFICATION_SINGLE_TIMES);
-    //TODO(sean) remove clone
-    if validate_blob::<T>(kzg, blob.blob.clone(), blob.kzg_commitment, blob.kzg_proof)
+
+    if kzg
+        .verify_blob_kzg_proof(&blob.blob, blob.kzg_commitment, blob.kzg_proof)
         .map_err(AvailabilityCheckError::Kzg)?
     {
         Ok(KzgVerifiedBlob { blob })
@@ -513,20 +513,16 @@ pub fn verify_kzg_for_blob<T: EthSpec>(
 /// in a loop since this function kzg verifies a list of blobs more efficiently.
 pub fn verify_kzg_for_blob_list<T: EthSpec>(
     blob_list: &BlobSidecarList<T>,
-    kzg: &Kzg,
+    kzg: &Kzg<T>,
 ) -> Result<(), AvailabilityCheckError> {
     let _timer = crate::metrics::start_timer(&crate::metrics::KZG_VERIFICATION_BATCH_TIMES);
     let (blobs, (commitments, proofs)): (Vec<_>, (Vec<_>, Vec<_>)) = blob_list
         .iter()
         .map(|blob| (blob.blob.clone(), (blob.kzg_commitment, blob.kzg_proof)))
         .unzip();
-    if validate_blobs::<T>(
-        kzg,
-        commitments.as_slice(),
-        blobs.as_slice(),
-        proofs.as_slice(),
-    )
-    .map_err(AvailabilityCheckError::Kzg)?
+    if kzg
+        .verify_blob_kzg_proof_batch(blobs.as_slice(), &commitments, &proofs)
+        .map_err(AvailabilityCheckError::Kzg)?
     {
         Ok(())
     } else {

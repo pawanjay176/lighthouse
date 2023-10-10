@@ -21,7 +21,7 @@ use eth1::Config as Eth1Config;
 use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
 use futures::channel::mpsc::Sender;
-use kzg::{Kzg, TrustedSetup};
+use kzg::TrustedSetup;
 use operation_pool::{OperationPool, PersistedOperationPool};
 use parking_lot::RwLock;
 use proto_array::{DisallowedReOrgOffsets, ReOrgThreshold};
@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use store::{Error as StoreError, HotColdDB, ItemStore, KeyValueStoreOp};
 use task_executor::{ShutdownReason, TaskExecutor};
+use types::Kzg;
 use types::{
     BeaconBlock, BeaconState, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti, Hash256,
     PublicKeyBytes, Signature, SignedBeaconBlock, Slot,
@@ -688,9 +689,6 @@ where
         let kzg = if let Some(trusted_setup) = self.trusted_setup {
             let kzg = Kzg::new_from_trusted_setup(trusted_setup)
                 .map_err(|e| format!("Failed to load trusted setup: {:?}", e))?;
-            if TEthSpec::field_elements_per_blob() != kzg.field_elements_per_blob() {
-                return Err("Trusted setup is inconsistent with spec preset".to_string());
-            }
             let kzg_arc = Arc::new(kzg);
             Some(kzg_arc)
         } else {
