@@ -33,10 +33,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use tokio::sync::mpsc;
 use types::{
-    Attestation, AttesterSlashing, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate,
-    LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
-    SignedBlobSidecar, SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit,
-    Slot, SubnetId, SyncCommitteeMessage, SyncSubnetId,
+    beacon_block_body::format_kzg_commitments, Attestation, AttesterSlashing, EthSpec, Hash256,
+    IndexedAttestation, LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
+    SignedAggregateAndProof, SignedBeaconBlock, SignedBlobSidecar, SignedBlsToExecutionChange,
+    SignedContributionAndProof, SignedVoluntaryExit, Slot, SubnetId, SyncCommitteeMessage,
+    SyncSubnetId,
 };
 
 use beacon_processor::{
@@ -614,6 +615,14 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         let root = signed_blob.message.block_root;
         let index = signed_blob.message.index;
         let commitment = signed_blob.message.kzg_commitment;
+        debug!(
+            self.log,
+            "Gossip blob arrived";
+            "block_root" => ?root,
+            "slot" => %slot,
+            "index" => %index,
+            "commitment" => %commitment.to_string()
+        );
         let delay = get_slot_delay_ms(seen_duration, slot, &self.chain.slot_clock);
         // Log metrics to track delay from other nodes on the network.
         metrics::observe_duration(&metrics::BEACON_BLOB_GOSSIP_SLOT_START_DELAY_TIME, delay);
@@ -906,6 +915,13 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         } else {
             block.canonical_root()
         };
+
+        debug!(
+            self.log,
+            "Gossip block arrived";
+            "block_root" => ?root,
+            "slot" => %slot,
+        );
 
         // Write the time the block was observed into delay cache.
         self.chain.block_times_cache.write().set_time_observed(
