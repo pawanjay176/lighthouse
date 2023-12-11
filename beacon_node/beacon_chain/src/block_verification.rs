@@ -783,7 +783,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         // it to the slasher if an error occurs, because that's the end of this block's journey,
         // and it could be a repeat proposal (a likely cause for slashing!).
         let header = block.signed_block_header();
-        Self::new_without_slasher_checks(block, chain).map_err(|e| {
+        Self::new_without_slasher_checks(block, &header, chain).map_err(|e| {
             process_block_slash_info::<_, BlockError<T::EthSpec>>(
                 chain,
                 BlockSlashInfo::from_early_error_block(header, e),
@@ -792,8 +792,11 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
     }
 
     /// As for new, but doesn't pass the block to the slasher.
+    /// We also pass the `block_header` since it's faster to compute the `canonical_root` on the
+    /// header compared to the entire block body.
     fn new_without_slasher_checks(
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
+        block_header: &SignedBeaconBlockHeader,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockError<T::EthSpec>> {
         // Ensure the block is the correct structure for the fork at `block.slot()`.
@@ -813,7 +816,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
             });
         }
 
-        let block_root = get_block_root(&block);
+        let block_root = block_header.message.canonical_root();
 
         // Disallow blocks that conflict with the anchor (weak subjectivity checkpoint), if any.
         check_block_against_anchor_slot(block.message(), chain)?;
@@ -926,19 +929,17 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
             (proposer_index, state.fork(), Some(parent), block)
         };
 
-        let header = block.signed_block_header();
-
         // First check if a signature exists by obtaining the read lock.
         // Only obtain the write lock if signature doesn't exist in the cache.
         if !chain
             .proposer_signature_cache
             .read()
-            .signature_exists::<BlockError<T::EthSpec>>(block_root, &header)
+            .signature_exists::<BlockError<T::EthSpec>>(block_root, block_header)
             .map_err(|_| BlockError::ProposalSignatureInvalid)?
         {
             match chain.proposer_signature_cache.write().observe_signature(
                 block_root,
-                &block.signed_block_header(),
+                block_header,
                 &fork,
                 |header, fork| {
                     verify_header_signature::<_, BlockError<T::EthSpec>>(chain, header, fork)
@@ -952,8 +953,6 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
                 Err(proposer_signature_cache::Error::VerificationError(err)) => return Err(err),
             }
         }
-
-        // verify_header_signature(chain, &block.signed_block_header(), &fork)?;
 
         // Now the signature is valid, store the proposal so we don't accept another from this
         // validator and slot.
