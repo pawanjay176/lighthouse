@@ -1779,8 +1779,9 @@ dependencies = [
 
 [[package]]
 name = "discv5"
-version = "0.3.1"
-source = "git+https://github.com/sigp/discv5#546e19c4d6692b0ed538b57d2e963bbb1080722b"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b0b31b65aa1fcbd4e0171f1afed5363ccf25efb988ecd42450036f4c6d8539"
 dependencies = [
  "aes 0.7.5",
  "aes-gcm 0.9.4",
@@ -2840,7 +2841,7 @@ dependencies = [
 [[package]]
 name = "futures-bounded"
 version = "0.2.3"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "futures-timer",
  "futures-util",
@@ -4067,8 +4068,8 @@ dependencies = [
 
 [[package]]
 name = "libp2p"
-version = "0.53.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+version = "0.53.2"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "bytes",
  "either",
@@ -4077,8 +4078,8 @@ dependencies = [
  "getrandom",
  "instant",
  "libp2p-allow-block-list 0.3.0",
- "libp2p-connection-limits 0.3.0",
- "libp2p-core 0.41.1",
+ "libp2p-connection-limits 0.3.1",
+ "libp2p-core 0.41.2",
  "libp2p-dns",
  "libp2p-gossipsub",
  "libp2p-identify",
@@ -4088,13 +4089,13 @@ dependencies = [
  "libp2p-noise",
  "libp2p-plaintext",
  "libp2p-quic",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "libp2p-tcp",
  "libp2p-upnp",
  "libp2p-yamux",
  "multiaddr",
  "pin-project",
- "rw-stream-sink 0.4.0 (git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub)",
+ "rw-stream-sink 0.4.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "thiserror",
 ]
 
@@ -4113,11 +4114,11 @@ dependencies = [
 [[package]]
 name = "libp2p-allow-block-list"
 version = "0.3.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "void",
 ]
 
@@ -4135,12 +4136,12 @@ dependencies = [
 
 [[package]]
 name = "libp2p-connection-limits"
-version = "0.3.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+version = "0.3.1"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "void",
 ]
 
@@ -4174,8 +4175,8 @@ dependencies = [
 
 [[package]]
 name = "libp2p-core"
-version = "0.41.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+version = "0.41.2"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "either",
  "fnv",
@@ -4185,13 +4186,13 @@ dependencies = [
  "libp2p-identity",
  "multiaddr",
  "multihash",
- "multistream-select 0.13.0 (git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub)",
+ "multistream-select 0.13.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "once_cell",
  "parking_lot 0.12.1",
  "pin-project",
  "quick-protobuf",
  "rand",
- "rw-stream-sink 0.4.0 (git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub)",
+ "rw-stream-sink 0.4.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "smallvec",
  "thiserror",
  "tracing",
@@ -4202,12 +4203,12 @@ dependencies = [
 [[package]]
 name = "libp2p-dns"
 version = "0.41.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "async-trait",
  "futures",
  "hickory-resolver",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "parking_lot 0.12.1",
  "smallvec",
@@ -4217,7 +4218,7 @@ dependencies = [
 [[package]]
 name = "libp2p-gossipsub"
 version = "0.46.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "async-channel",
  "asynchronous-codec",
@@ -4232,9 +4233,9 @@ dependencies = [
  "getrandom",
  "hex_fmt",
  "instant",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "prometheus-client",
  "quick-protobuf",
  "quick-protobuf-codec",
@@ -4249,16 +4250,16 @@ dependencies = [
 [[package]]
 name = "libp2p-identify"
 version = "0.44.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "asynchronous-codec",
  "either",
  "futures",
  "futures-bounded",
  "futures-timer",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "lru 0.12.1",
  "quick-protobuf",
  "quick-protobuf-codec",
@@ -4294,15 +4295,15 @@ dependencies = [
 [[package]]
 name = "libp2p-mdns"
 version = "0.45.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "data-encoding",
  "futures",
  "hickory-proto",
  "if-watch",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "rand",
  "smallvec",
  "socket2 0.5.5",
@@ -4314,15 +4315,15 @@ dependencies = [
 [[package]]
 name = "libp2p-metrics"
 version = "0.14.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "futures",
  "instant",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-gossipsub",
  "libp2p-identify",
  "libp2p-identity",
- "libp2p-swarm 0.44.0",
+ "libp2p-swarm 0.44.1",
  "pin-project",
  "prometheus-client",
 ]
@@ -4330,12 +4331,12 @@ dependencies = [
 [[package]]
 name = "libp2p-mplex"
 version = "0.41.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "asynchronous-codec",
  "bytes",
  "futures",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "nohash-hasher",
  "parking_lot 0.12.1",
@@ -4348,13 +4349,13 @@ dependencies = [
 [[package]]
 name = "libp2p-noise"
 version = "0.44.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "asynchronous-codec",
  "bytes",
  "curve25519-dalek",
  "futures",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "multiaddr",
  "multihash",
@@ -4373,12 +4374,12 @@ dependencies = [
 [[package]]
 name = "libp2p-plaintext"
 version = "0.41.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "asynchronous-codec",
  "bytes",
  "futures",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "quick-protobuf",
  "quick-protobuf-codec",
@@ -4387,14 +4388,14 @@ dependencies = [
 
 [[package]]
 name = "libp2p-quic"
-version = "0.10.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+version = "0.10.2"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "bytes",
  "futures",
  "futures-timer",
  "if-watch",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "libp2p-tls",
  "parking_lot 0.12.1",
@@ -4431,18 +4432,18 @@ dependencies = [
 
 [[package]]
 name = "libp2p-swarm"
-version = "0.44.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+version = "0.44.1"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "either",
  "fnv",
  "futures",
  "futures-timer",
  "instant",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "libp2p-swarm-derive",
- "multistream-select 0.13.0 (git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub)",
+ "multistream-select 0.13.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "once_cell",
  "rand",
  "smallvec",
@@ -4453,8 +4454,8 @@ dependencies = [
 
 [[package]]
 name = "libp2p-swarm-derive"
-version = "0.34.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+version = "0.34.1"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4465,13 +4466,13 @@ dependencies = [
 [[package]]
 name = "libp2p-tcp"
 version = "0.41.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "futures",
  "futures-timer",
  "if-watch",
  "libc",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "socket2 0.5.5",
  "tokio",
@@ -4481,11 +4482,11 @@ dependencies = [
 [[package]]
 name = "libp2p-tls"
 version = "0.3.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "futures",
  "futures-rustls",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "libp2p-identity",
  "rcgen",
  "ring 0.16.20",
@@ -4499,13 +4500,13 @@ dependencies = [
 [[package]]
 name = "libp2p-upnp"
 version = "0.2.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "futures",
  "futures-timer",
  "igd-next",
- "libp2p-core 0.41.1",
- "libp2p-swarm 0.44.0",
+ "libp2p-core 0.41.2",
+ "libp2p-swarm 0.44.1",
  "tokio",
  "tracing",
  "void",
@@ -4514,13 +4515,15 @@ dependencies = [
 [[package]]
 name = "libp2p-yamux"
 version = "0.45.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
+ "either",
  "futures",
- "libp2p-core 0.41.1",
+ "libp2p-core 0.41.2",
  "thiserror",
  "tracing",
- "yamux",
+ "yamux 0.12.1",
+ "yamux 0.13.1",
 ]
 
 [[package]]
@@ -4660,7 +4663,7 @@ dependencies = [
  "futures",
  "hex",
  "lazy_static",
- "libp2p 0.53.1",
+ "libp2p 0.53.2",
  "libp2p-mplex",
  "lighthouse_metrics",
  "lighthouse_version",
@@ -5124,7 +5127,7 @@ dependencies = [
 [[package]]
 name = "multistream-select"
 version = "0.13.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "bytes",
  "futures",
@@ -5452,9 +5455,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.18.0"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
+checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "oneshot_broadcast"
@@ -6216,7 +6219,7 @@ dependencies = [
 [[package]]
 name = "quick-protobuf-codec"
 version = "0.3.1"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -6775,7 +6778,7 @@ dependencies = [
 [[package]]
 name = "rw-stream-sink"
 version = "0.4.0"
-source = "git+https://github.com/sigp/rust-libp2p/?branch=lighthouse-gossipsub#a70bef04c0c3e1dc35b812a597bb66ca89788e36"
+source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#d4b5c778a9f402b901bfac9308e418d16ae65334"
 dependencies = [
  "futures",
  "pin-project",
@@ -9303,11 +9306,27 @@ dependencies = [
 
 [[package]]
 name = "yamux"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0329ef377816896f014435162bb3711ea7a07729c23d0960e6f8048b21b8fe91"
+checksum = "9ed0164ae619f2dc144909a9f082187ebb5893693d8c0196e8085283ccd4b776"
 dependencies = [
  "futures",
+ "log",
+ "nohash-hasher",
+ "parking_lot 0.12.1",
+ "pin-project",
+ "rand",
+ "static_assertions",
+]
+
+[[package]]
+name = "yamux"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad1d0148b89300047e72994bee99ecdabd15a9166a7b70c8b8c37c314dcc9002"
+dependencies = [
+ "futures",
+ "instant",
  "log",
  "nohash-hasher",
  "parking_lot 0.12.1",
