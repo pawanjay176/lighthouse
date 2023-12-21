@@ -4,7 +4,8 @@ use std::net::IpAddr;
 use std::task::{Context, Poll};
 
 use futures::StreamExt;
-use libp2p::core::{multiaddr, ConnectedPoint};
+use libp2p::core::ConnectedPoint;
+use libp2p::core::multiaddr::Protocol as Proto;
 use libp2p::identity::PeerId;
 use libp2p::swarm::behaviour::{ConnectionClosed, ConnectionEstablished, DialFailure, FromSwarm};
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
@@ -168,8 +169,8 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
     ) -> Result<(), ConnectionDenied> {
         // get the IP address to verify it's not banned.
         let ip = match remote_addr.iter().next() {
-            Some(libp2p::multiaddr::Protocol::Ip6(ip)) => IpAddr::V6(ip),
-            Some(libp2p::multiaddr::Protocol::Ip4(ip)) => IpAddr::V4(ip),
+            Some(Proto::Ip6(ip)) => IpAddr::V6(ip),
+            Some(Proto::Ip4(ip)) => IpAddr::V4(ip),
             _ => {
                 return Err(ConnectionDenied::new(format!(
                     "Connection to peer rejected: invalid multiaddr: {remote_addr}"
@@ -248,28 +249,25 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
             match remote_addr.iter().find(|proto| {
                 matches!(
                     proto,
-                    multiaddr::Protocol::QuicV1 | multiaddr::Protocol::Tcp(_) | multiaddr::Protocol::Ip4(_) | multiaddr::Protocol::Ip6(_) | multiaddr::Protocol::Dns(_) | multiaddr::Protocol::Dns4(_) | multiaddr::Protocol::Dns6(_)
+                    Proto::QuicV1 | 
+                    Proto::Tcp(_) | 
+                    Proto::Ip4(_) | 
+                    Proto::Ip6(_) | 
+                    Proto::Dns(_) | 
+                    Proto::Dns4(_) | 
+                    Proto::Dns6(_)
                 )
             }) {
-                Some(multiaddr::Protocol::QuicV1) => {
+                Some(Proto::QuicV1) => {
                     metrics::inc_gauge(&metrics::QUIC_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Tcp(_)) => {
+                Some(Proto::Tcp(_)) => {
                     metrics::inc_gauge(&metrics::TCP_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Ip4(_)) => {
+                Some(Proto::Ip4(_) | Proto::Dns(_) | Proto::Dns4(_)) => {
                     metrics::inc_gauge(&metrics::IP4_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Dns(_)) => {
-                    metrics::inc_gauge(&metrics::IP4_PEERS_CONNECTED);
-                }
-                Some(multiaddr::Protocol::Dns4(_)) => {
-                    metrics::inc_gauge(&metrics::IP4_PEERS_CONNECTED);
-                }
-                Some(multiaddr::Protocol::Ip6(_)) => {
-                    metrics::inc_gauge(&metrics::IP6_PEERS_CONNECTED);
-                }
-                Some(multiaddr::Protocol::Dns6(_)) => {
+                Some(Proto::Ip6(_) | Proto::Dns6(_)) => {
                     metrics::inc_gauge(&metrics::IP6_PEERS_CONNECTED);
                 }
                 Some(_) => unreachable!(),
@@ -351,28 +349,26 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
             match remote_addr.iter().find(|proto| {
                 matches!(
                     proto,
-                    multiaddr::Protocol::QuicV1 | multiaddr::Protocol::Tcp(_) | multiaddr::Protocol::Ip4(_) | multiaddr::Protocol::Ip6(_) | multiaddr::Protocol::Dns(_) | multiaddr::Protocol::Dns4(_) | multiaddr::Protocol::Dns6(_)
+                    Proto::QuicV1 |
+                    Proto::Tcp(_) |
+                    Proto::Ip4(_) |
+                    Proto::Ip6(_) |
+                    Proto::Dns(_) |
+                    Proto::Dns4(_) |
+                    Proto::Dns6(_)
                 )
+
             }) {
-                Some(multiaddr::Protocol::QuicV1) => {
+                Some(Proto::QuicV1) => {
                     metrics::dec_gauge(&metrics::QUIC_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Tcp(_)) => {
+                Some(Proto::Tcp(_)) => {
                     metrics::dec_gauge(&metrics::TCP_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Ip4(_)) => {
+                Some(Proto::Ip4(_) | Proto::Dns(_) | Proto::Dns4(_)) => {
                     metrics::dec_gauge(&metrics::IP4_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Dns(_)) => {
-                    metrics::dec_gauge(&metrics::IP4_PEERS_CONNECTED);
-                }
-                Some(multiaddr::Protocol::Dns4(_)) => {
-                    metrics::dec_gauge(&metrics::IP4_PEERS_CONNECTED);
-                }
-                Some(multiaddr::Protocol::Ip6(_)) => {
-                    metrics::dec_gauge(&metrics::IP6_PEERS_CONNECTED);
-                }
-                Some(multiaddr::Protocol::Dns6(_)) => {
+                Some(Proto::Ip6(_) | Proto::Dns6(_)) => {
                     metrics::dec_gauge(&metrics::IP6_PEERS_CONNECTED);
                 }
                 // If it's an unknown protocol we already logged when connection was established.
