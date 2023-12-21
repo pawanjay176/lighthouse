@@ -157,6 +157,10 @@ pub struct Config {
 
     /// Configuration for the inbound rate limiter (requests received by this node).
     pub inbound_rate_limiter_config: Option<InboundRateLimiterConfig>,
+
+    /// Whether to disable logging duplicate gossip messages as WARN. If set to true, duplicate  
+    /// errors will be logged at DEBUG level.
+    pub disable_duplicate_warn_logs: bool,
 }
 
 impl Config {
@@ -362,7 +366,7 @@ impl Default for Config {
             disable_discovery: false,
             disable_quic_support: false,
             upnp_enabled: true,
-            network_load: 3,
+            network_load: 4,
             private: false,
             subscribe_all_subnets: false,
             import_all_attestations: false,
@@ -374,6 +378,7 @@ impl Default for Config {
             outbound_rate_limiter_config: None,
             invalid_block_storage: None,
             inbound_rate_limiter_config: None,
+            disable_duplicate_warn_logs: false,
         }
     }
 }
@@ -421,7 +426,7 @@ impl From<u8> for NetworkLoad {
                 mesh_n_high: 10,
                 gossip_lazy: 3,
                 history_gossip: 3,
-                heartbeat_interval: Duration::from_millis(700),
+                heartbeat_interval: Duration::from_millis(1000),
             },
             4 => NetworkLoad {
                 name: "Average",
@@ -431,7 +436,7 @@ impl From<u8> for NetworkLoad {
                 mesh_n_high: 12,
                 gossip_lazy: 3,
                 history_gossip: 3,
-                heartbeat_interval: Duration::from_millis(700),
+                heartbeat_interval: Duration::from_millis(1000),
             },
             // 5 and above
             _ => NetworkLoad {
@@ -442,7 +447,7 @@ impl From<u8> for NetworkLoad {
                 mesh_n_high: 15,
                 gossip_lazy: 5,
                 history_gossip: 6,
-                heartbeat_interval: Duration::from_millis(500),
+                heartbeat_interval: Duration::from_millis(700),
             },
         }
     }
@@ -505,6 +510,7 @@ pub fn gossipsub_config(
         .gossip_lazy(load.gossip_lazy)
         .fanout_ttl(Duration::from_secs(60))
         .history_length(12)
+        .flood_publish(false)
         .max_messages_per_rpc(Some(500)) // Responses to IWANT can be quite large
         .history_gossip(load.history_gossip)
         .validate_messages() // require validation before propagation

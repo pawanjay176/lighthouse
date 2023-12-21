@@ -128,6 +128,8 @@ pub struct Network<AppReqId: ReqId, TSpec: EthSpec> {
     gossip_cache: GossipCache,
     /// This node's PeerId.
     pub local_peer_id: PeerId,
+    /// Flag to disable warning logs for duplicate gossip messages and log at DEBUG level instead.
+    pub disable_duplicate_warn_logs: bool,
     /// Logger for behaviour actions.
     log: slog::Logger,
 }
@@ -425,6 +427,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
             update_gossipsub_scores,
             gossip_cache,
             local_peer_id,
+            disable_duplicate_warn_logs: config.disable_duplicate_warn_logs,
             log,
         };
 
@@ -743,7 +746,21 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     .gossipsub_mut()
                     .publish(Topic::from(topic.clone()), message_data.clone())
                 {
-                    slog::warn!(self.log, "Could not publish message"; "error" => ?e);
+                    if self.disable_duplicate_warn_logs && matches!(e, PublishError::Duplicate) {
+                        debug!(
+                            self.log,
+                            "Could not publish message";
+                            "error" => ?e,
+                            "kind" => %topic.kind(),
+                        );
+                    } else {
+                        warn!(
+                            self.log,
+                            "Could not publish message";
+                            "error" => ?e,
+                            "kind" => %topic.kind(),
+                        );
+                    };
 
                     // add to metrics
                     match topic.kind() {
@@ -1248,8 +1265,31 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     "does_not_support_gossipsub",
                 );
             }
-            gossipsub::Event::SlowPeer { .. } => {
-                //TODO
+            gossipsub::Event::SlowPeer {
+                peer_id,
+                failed_messages,
+            } => {
+                debug!(self.log, "Slow gossipsub peer"; "peer_id" => %peer_id, "publish" => failed_messages.publish, "forward" => failed_messages.forward, "priority" => failed_messages.priority, "non_priority" => failed_messages.non_priority);
+                // Punish the peer if it cannot handle priority messages
+                if failed_messages.total_timeout() > 10 {
+                    debug!(self.log, "Slow gossipsub peer penalized for priority failure"; "peer_id" => %peer_id);
+                    self.peer_manager_mut().report_peer(
+                        &peer_id,
+                        PeerAction::HighToleranceError,
+                        ReportSource::Gossipsub,
+                        None,
+                        "publish_timeout_penalty",
+                    );
+                } else if failed_messages.total_queue_full() > 10 {
+                    debug!(self.log, "Slow gossipsub peer penalized for send queue full"; "peer_id" => %peer_id);
+                    self.peer_manager_mut().report_peer(
+                        &peer_id,
+                        PeerAction::HighToleranceError,
+                        ReportSource::Gossipsub,
+                        None,
+                        "queue_full_penalty",
+                    );
+                }
             }
         }
         None
@@ -1455,8 +1495,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                 self.build_response(id, peer_id, response)
             }
             HandlerEvent::Close(_) => {
-                let _ = self.swarm.disconnect_peer_id(peer_id);
-                // NOTE: we wait for the swarm to report the connection as actually closed
+                // NOTE: This is handled in the RPC behaviour.
                 None
             }
         }

@@ -51,7 +51,6 @@ pub fn build_transport(
 
     // yamux config
     let yamux_config = yamux::Config::default();
-
     // Creates the TCP transport layer
     let tcp = libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default().nodelay(true))
         .upgrade(core::upgrade::Version::V1)

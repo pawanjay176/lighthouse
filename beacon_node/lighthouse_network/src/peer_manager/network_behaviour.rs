@@ -4,7 +4,8 @@ use std::net::IpAddr;
 use std::task::{Context, Poll};
 
 use futures::StreamExt;
-use libp2p::core::{multiaddr, ConnectedPoint};
+use libp2p::core::multiaddr::Protocol;
+use libp2p::core::ConnectedPoint;
 use libp2p::identity::PeerId;
 use libp2p::swarm::behaviour::{ConnectionClosed, ConnectionEstablished, DialFailure, FromSwarm};
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
@@ -168,8 +169,8 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
     ) -> Result<(), ConnectionDenied> {
         // get the IP address to verify it's not banned.
         let ip = match remote_addr.iter().next() {
-            Some(libp2p::multiaddr::Protocol::Ip6(ip)) => IpAddr::V6(ip),
-            Some(libp2p::multiaddr::Protocol::Ip4(ip)) => IpAddr::V4(ip),
+            Some(Protocol::Ip6(ip)) => IpAddr::V6(ip),
+            Some(Protocol::Ip4(ip)) => IpAddr::V4(ip),
             _ => {
                 return Err(ConnectionDenied::new(format!(
                     "Connection to peer rejected: invalid multiaddr: {remote_addr}"
@@ -245,17 +246,21 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         // increment prometheus metrics
         if self.metrics_enabled {
             let remote_addr = endpoint.get_remote_address();
-            match remote_addr.iter().find(|proto| {
-                matches!(
-                    proto,
-                    multiaddr::Protocol::QuicV1 | multiaddr::Protocol::Tcp(_)
-                )
-            }) {
-                Some(multiaddr::Protocol::QuicV1) => {
+            match remote_addr
+                .iter()
+                .find(|proto| matches!(proto, Protocol::QuicV1 | Protocol::Tcp(_)))
+            {
+                Some(Protocol::QuicV1) => {
                     metrics::inc_gauge(&metrics::QUIC_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Tcp(_)) => {
+                Some(Protocol::Tcp(_)) => {
                     metrics::inc_gauge(&metrics::TCP_PEERS_CONNECTED);
+                }
+                Some(Protocol::Ip4(_) | Protocol::Dns(_) | Protocol::Dns4(_)) => {
+                    metrics::inc_gauge(&metrics::IP4_PEERS_CONNECTED);
+                }
+                Some(Protocol::Ip6(_) | Protocol::Dns6(_)) => {
+                    metrics::inc_gauge(&metrics::IP6_PEERS_CONNECTED);
                 }
                 Some(_) => unreachable!(),
                 None => {
@@ -333,17 +338,21 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         let remote_addr = endpoint.get_remote_address();
         // Update the prometheus metrics
         if self.metrics_enabled {
-            match remote_addr.iter().find(|proto| {
-                matches!(
-                    proto,
-                    multiaddr::Protocol::QuicV1 | multiaddr::Protocol::Tcp(_)
-                )
-            }) {
-                Some(multiaddr::Protocol::QuicV1) => {
+            match remote_addr
+                .iter()
+                .find(|proto| matches!(proto, Protocol::QuicV1 | Protocol::Tcp(_)))
+            {
+                Some(Protocol::QuicV1) => {
                     metrics::dec_gauge(&metrics::QUIC_PEERS_CONNECTED);
                 }
-                Some(multiaddr::Protocol::Tcp(_)) => {
+                Some(Protocol::Tcp(_)) => {
                     metrics::dec_gauge(&metrics::TCP_PEERS_CONNECTED);
+                }
+                Some(Protocol::Ip4(_) | Protocol::Dns(_) | Protocol::Dns4(_)) => {
+                    metrics::dec_gauge(&metrics::IP4_PEERS_CONNECTED);
+                }
+                Some(Protocol::Ip6(_) | Protocol::Dns6(_)) => {
+                    metrics::dec_gauge(&metrics::IP6_PEERS_CONNECTED);
                 }
                 // If it's an unknown protocol we already logged when connection was established.
                 _ => {}
