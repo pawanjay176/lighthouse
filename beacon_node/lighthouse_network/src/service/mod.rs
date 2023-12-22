@@ -1275,7 +1275,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     debug!(self.log, "Slow gossipsub peer penalized for priority failure"; "peer_id" => %peer_id);
                     self.peer_manager_mut().report_peer(
                         &peer_id,
-                        PeerAction::HighToleranceError,
+                        PeerAction::MidToleranceError,
                         ReportSource::Gossipsub,
                         None,
                         "publish_timeout_penalty",
@@ -1284,7 +1284,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     debug!(self.log, "Slow gossipsub peer penalized for send queue full"; "peer_id" => %peer_id);
                     self.peer_manager_mut().report_peer(
                         &peer_id,
-                        PeerAction::HighToleranceError,
+                        PeerAction::MidToleranceError,
                         ReportSource::Gossipsub,
                         None,
                         "queue_full_penalty",
