@@ -47,6 +47,9 @@ pub fn gossip_max_size(is_merge_enabled: bool, gossip_max_size: usize) -> usize 
 pub struct GossipsubConfigParams {
     pub message_domain_valid_snappy: [u8; 4],
     pub gossip_max_size: usize,
+    pub max_queue_len: usize,
+    pub max_forward_duration: Duration,
+    pub max_publish_duration: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -158,9 +161,18 @@ pub struct Config {
     /// Configuration for the inbound rate limiter (requests received by this node).
     pub inbound_rate_limiter_config: Option<InboundRateLimiterConfig>,
 
-    /// Whether to disable logging duplicate gossip messages as WARN. If set to true, duplicate  
+    /// Whether to disable logging duplicate gossip messages as WARN. If set to true, duplicate
     /// errors will be logged at DEBUG level.
     pub disable_duplicate_warn_logs: bool,
+
+    /// Number of max Gossipsub Publish and Forward messages.
+    pub gossipsub_max_queue_len: usize,
+
+    /// Max Duration of the gossipsub Forward messages.
+    pub gossipsub_max_forward_duration: Duration,
+
+    /// Max Duration of the gossipsub Publish messages.
+    pub gossipsub_max_publish_duration: Duration,
 }
 
 impl Config {
@@ -379,6 +391,9 @@ impl Default for Config {
             invalid_block_storage: None,
             inbound_rate_limiter_config: None,
             disable_duplicate_warn_logs: false,
+            gossipsub_max_queue_len: 5000,
+            gossipsub_max_forward_duration: Duration::new(1, 0),
+            gossipsub_max_publish_duration: Duration::new(5, 0),
         }
     }
 }
@@ -518,6 +533,9 @@ pub fn gossipsub_config(
         .duplicate_cache_time(DUPLICATE_CACHE_TIME)
         .message_id_fn(gossip_message_id)
         .allow_self_origin(true)
+        .connection_handler_queue_len(gossipsub_config_params.max_queue_len)
+        .publish_queue_duration(gossipsub_config_params.max_publish_duration)
+        .forward_queue_duration(gossipsub_config_params.max_forward_duration)
         .build()
         .expect("valid gossipsub configuration")
 }

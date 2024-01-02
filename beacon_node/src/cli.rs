@@ -506,6 +506,26 @@ pub fn cli_app<'a, 'b>() -> App<'a, 'b> {
             Shufflings are dependent on validator count and setting this value to a large number can consume a large amount of memory.")
             .takes_value(true)
         )
+        .arg(
+            Arg::with_name("gossipsub-max-queue-len")
+                .long("gossipsub-max-queue-len")
+                .help("Number of max Gossipsub Publish and Forward messages.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("gossipsub-max-forward-duration")
+                .long("gossipsub-max-forward-duration")
+                .help("Max Duration of the gossipsub Forward messages.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("gossipsub-max-publish-duration")
+                .long("gossipsub-max-publish-duration")
+                .help("Max Duration of the gossipsub Publish messages.")
+                .takes_value(true),
+        )
+
+
 
         /*
          * Monitoring metrics

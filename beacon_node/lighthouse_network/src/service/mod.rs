@@ -250,6 +250,9 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
             let gossipsub_config_params = GossipsubConfigParams {
                 message_domain_valid_snappy: ctx.chain_spec.message_domain_valid_snappy,
                 gossip_max_size: ctx.chain_spec.gossip_max_size as usize,
+                max_queue_len: ctx.config.gossipsub_max_queue_len,
+                max_publish_duration: ctx.config.gossipsub_max_publish_duration,
+                max_forward_duration: ctx.config.gossipsub_max_forward_duration,
             };
             config.gs_config = gossipsub_config(
                 config.network_load,

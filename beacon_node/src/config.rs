@@ -1398,6 +1398,27 @@ pub fn set_network_config(
 
     config.disable_duplicate_warn_logs = cli_args.is_present("disable-duplicate-warn-logs");
 
+    if let Some(Ok(max)) = cli_args
+        .value_of("gossipsub-max-queue-len")
+        .map(|max| max.parse::<usize>())
+    {
+        config.gossipsub_max_queue_len = max;
+    }
+
+    if let Some(Ok(secs)) = cli_args
+        .value_of("gossipsub-max-publish-duration")
+        .map(|secs| secs.parse::<u64>())
+    {
+        config.gossipsub_max_publish_duration = Duration::new(secs, 0);
+    }
+
+    if let Some(Ok(secs)) = cli_args
+        .value_of("gossipsub-max-forward-duration")
+        .map(|secs| secs.parse::<u64>())
+    {
+        config.gossipsub_max_forward_duration = Duration::new(secs, 0);
+    }
+
     Ok(())
 }
 
