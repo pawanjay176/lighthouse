@@ -11,7 +11,7 @@ use libp2p::swarm::behaviour::{ConnectionClosed, ConnectionEstablished, DialFail
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
 use libp2p::swarm::dummy::ConnectionHandler;
 use libp2p::swarm::{ConnectionDenied, ConnectionId, NetworkBehaviour, ToSwarm};
-use slog::{debug, error, trace};
+use slog::{debug, error};
 use types::EthSpec;
 
 use crate::discovery::enr_ext::EnrExt;
@@ -167,18 +167,21 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         _local_addr: &libp2p::Multiaddr,
         remote_addr: &libp2p::Multiaddr,
     ) -> Result<(), ConnectionDenied> {
+        debug!(self.log, "Pending inbound connection"; "remote_addr" => %remote_addr);
         // get the IP address to verify it's not banned.
         let ip = match remote_addr.iter().next() {
             Some(Protocol::Ip6(ip)) => IpAddr::V6(ip),
             Some(Protocol::Ip4(ip)) => IpAddr::V4(ip),
             _ => {
+                debug!(self.log, "Pending inbound connection rejected invalid multiaddr"; "remote_addr" => %remote_addr);
                 return Err(ConnectionDenied::new(format!(
                     "Connection to peer rejected: invalid multiaddr: {remote_addr}"
-                )))
+                )));
             }
         };
 
         if self.network_globals.peers.read().is_ip_banned(&ip) {
+            debug!(self.log, "Pending inbound connection rejected peer is banned"; "remote_addr" => %remote_addr);
             return Err(ConnectionDenied::new(format!(
                 "Connection to peer rejected: peer {ip} is banned"
             )));
@@ -194,13 +197,14 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         _local_addr: &libp2p::Multiaddr,
         remote_addr: &libp2p::Multiaddr,
     ) -> Result<libp2p::swarm::THandler<Self>, ConnectionDenied> {
-        trace!(self.log, "Inbound connection"; "peer_id" => %peer_id, "multiaddr" => %remote_addr);
+        debug!(self.log, "Inbound connection attempt"; "peer_id" => %peer_id, "multiaddr" => %remote_addr);
         // We already checked if the peer was banned on `handle_pending_inbound_connection`.
         if let Some(BanResult::BadScore) = self.ban_status(&peer_id) {
             return Err(ConnectionDenied::new(
                 "Connection to peer rejected: peer has a bad score",
             ));
         }
+        debug!(self.log, "Inbound connection established"; "peer_id" => %peer_id, "multiaddr" => %remote_addr);
         Ok(ConnectionHandler)
     }
 
@@ -211,13 +215,16 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         addr: &libp2p::Multiaddr,
         _role_override: libp2p::core::Endpoint,
     ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
-        trace!(self.log, "Outbound connection"; "peer_id" => %peer_id, "multiaddr" => %addr);
+        debug!(self.log, "Outbound connection attempt"; "peer_id" => %peer_id, "multiaddr" => %addr);
         match self.ban_status(&peer_id) {
             Some(cause) => {
                 error!(self.log, "Connected a banned peer. Rejecting connection"; "peer_id" => %peer_id);
                 Err(ConnectionDenied::new(cause))
             }
-            None => Ok(ConnectionHandler),
+            None => {
+                debug!(self.log, "Outbound connection established"; "peer_id" => %peer_id, "multiaddr" => %addr);
+                Ok(ConnectionHandler)
+            }
         }
     }
 }
