@@ -333,7 +333,7 @@ version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7125e42787d53db9dd54261812ef17e937c95a51e4d291373b670342fa44310c"
 dependencies = [
- "event-listener 4.0.2",
+ "event-listener 4.0.3",
  "event-listener-strategy",
  "pin-project-lite",
 ]
@@ -2542,9 +2542,9 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "event-listener"
-version = "4.0.2"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "218a870470cce1469024e9fb66b901aa983929d81304a1cdb299f28118e550d5"
+checksum = "67b215c49b2b248c855fb73579eb1f4f26c38ffdc12973e20e07b91d78d5646e"
 dependencies = [
  "concurrent-queue",
  "parking",
@@ -2557,7 +2557,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "958e4d70b6d5e81971bebec42271ec641e7ff4e170a6fa605f2b8a8b65cb97d3"
 dependencies = [
- "event-listener 4.0.2",
+ "event-listener 4.0.3",
  "pin-project-lite",
 ]
 
@@ -2850,7 +2850,7 @@ dependencies = [
 [[package]]
 name = "futures-bounded"
 version = "0.2.3"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "futures-timer",
  "futures-util",
@@ -2892,9 +2892,9 @@ checksum = "a44623e20b9681a318efdd71c299b6b222ed6f231972bfe2f224ebad6311f0c1"
 
 [[package]]
 name = "futures-lite"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeee267a1883f7ebef3700f262d2d54de95dfaf38189015a74fdc4e0c7ad8143"
+checksum = "445ba825b27408685aaecefd65178908c36c6e96aaf6d8599419d46e624192ba"
 dependencies = [
  "futures-core",
  "pin-project-lite",
@@ -4005,9 +4005,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.151"
+version = "0.2.152"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "302d7ab3130588088d277783b1e2d2e10c9e9e4a16dd9050e6ec93fb3e7048f4"
+checksum = "13e3bf6590cbc649f4d1a3eefc9d5d6eb746f5200ffb04e5e142700b8faa56e7"
 
 [[package]]
 name = "libflate"
@@ -4086,7 +4086,7 @@ dependencies = [
 [[package]]
 name = "libp2p"
 version = "0.53.2"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "bytes",
  "either",
@@ -4112,7 +4112,7 @@ dependencies = [
  "libp2p-yamux",
  "multiaddr",
  "pin-project",
- "rw-stream-sink 0.4.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
+ "rw-stream-sink 0.4.0 (git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "thiserror",
 ]
 
@@ -4131,7 +4131,7 @@ dependencies = [
 [[package]]
 name = "libp2p-allow-block-list"
 version = "0.3.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "libp2p-core 0.41.2",
  "libp2p-identity",
@@ -4154,7 +4154,7 @@ dependencies = [
 [[package]]
 name = "libp2p-connection-limits"
 version = "0.3.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "libp2p-core 0.41.2",
  "libp2p-identity",
@@ -4193,7 +4193,7 @@ dependencies = [
 [[package]]
 name = "libp2p-core"
 version = "0.41.2"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "either",
  "fnv",
@@ -4203,13 +4203,13 @@ dependencies = [
  "libp2p-identity",
  "multiaddr",
  "multihash",
- "multistream-select 0.13.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
+ "multistream-select 0.13.0 (git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "once_cell",
  "parking_lot 0.12.1",
  "pin-project",
  "quick-protobuf",
  "rand",
- "rw-stream-sink 0.4.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
+ "rw-stream-sink 0.4.0 (git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "smallvec",
  "thiserror",
  "tracing",
@@ -4220,7 +4220,7 @@ dependencies = [
 [[package]]
 name = "libp2p-dns"
 version = "0.41.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "async-trait",
  "futures",
@@ -4235,7 +4235,7 @@ dependencies = [
 [[package]]
 name = "libp2p-gossipsub"
 version = "0.46.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "async-channel",
  "asynchronous-codec",
@@ -4267,7 +4267,7 @@ dependencies = [
 [[package]]
 name = "libp2p-identify"
 version = "0.44.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "asynchronous-codec",
  "either",
@@ -4312,7 +4312,7 @@ dependencies = [
 [[package]]
 name = "libp2p-mdns"
 version = "0.45.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "data-encoding",
  "futures",
@@ -4332,7 +4332,7 @@ dependencies = [
 [[package]]
 name = "libp2p-metrics"
 version = "0.14.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "futures",
  "instant",
@@ -4348,7 +4348,7 @@ dependencies = [
 [[package]]
 name = "libp2p-mplex"
 version = "0.41.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -4366,7 +4366,7 @@ dependencies = [
 [[package]]
 name = "libp2p-noise"
 version = "0.44.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -4391,7 +4391,7 @@ dependencies = [
 [[package]]
 name = "libp2p-plaintext"
 version = "0.41.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -4406,7 +4406,7 @@ dependencies = [
 [[package]]
 name = "libp2p-quic"
 version = "0.10.2"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "bytes",
  "futures",
@@ -4450,7 +4450,7 @@ dependencies = [
 [[package]]
 name = "libp2p-swarm"
 version = "0.44.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "either",
  "fnv",
@@ -4460,7 +4460,7 @@ dependencies = [
  "libp2p-core 0.41.2",
  "libp2p-identity",
  "libp2p-swarm-derive",
- "multistream-select 0.13.0 (git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
+ "multistream-select 0.13.0 (git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers)",
  "once_cell",
  "rand",
  "smallvec",
@@ -4472,7 +4472,7 @@ dependencies = [
 [[package]]
 name = "libp2p-swarm-derive"
 version = "0.34.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4483,7 +4483,7 @@ dependencies = [
 [[package]]
 name = "libp2p-tcp"
 version = "0.41.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "futures",
  "futures-timer",
@@ -4499,7 +4499,7 @@ dependencies = [
 [[package]]
 name = "libp2p-tls"
 version = "0.3.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "futures",
  "futures-rustls",
@@ -4517,7 +4517,7 @@ dependencies = [
 [[package]]
 name = "libp2p-upnp"
 version = "0.2.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "futures",
  "futures-timer",
@@ -4532,7 +4532,7 @@ dependencies = [
 [[package]]
 name = "libp2p-yamux"
 version = "0.45.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "either",
  "futures",
@@ -5146,7 +5146,7 @@ dependencies = [
 [[package]]
 name = "multistream-select"
 version = "0.13.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "bytes",
  "futures",
@@ -6112,9 +6112,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.75"
+version = "1.0.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907a61bd0f64c2f29cd1cf1dc34d05176426a3f504a78010f08416ddb7b13708"
+checksum = "95fc56cda0b5c3325f5fbbd7ff9fda9e02bb00bb3dac51252d2f1bfa1cb8cc8c"
 dependencies = [
  "unicode-ident",
 ]
@@ -6228,7 +6228,7 @@ dependencies = [
 [[package]]
 name = "quick-protobuf-codec"
 version = "0.3.1"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -6819,7 +6819,7 @@ dependencies = [
 [[package]]
 name = "rw-stream-sink"
 version = "0.4.0"
-source = "git+https://github.com/jxs/rust-libp2p/?branch=remove-peer-topics-topic-peers#6b7e34ca76f81f2e039588b2bfadb5599c17a257"
+source = "git+https://github.com/pawanjay176/rust-libp2p/?branch=remove-peer-topics-topic-peers#da7506852371af64fc063226025173454ef77574"
 dependencies = [
  "futures",
  "pin-project",
@@ -7006,9 +7006,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.194"
+version = "1.0.195"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b114498256798c94a0689e1a15fec6005dee8ac1f41de56404b67afc2a4b773"
+checksum = "63261df402c67811e9ac6def069e4786148c4563f4b50fd4bf30aa370d626b02"
 dependencies = [
  "serde_derive",
 ]
@@ -7035,9 +7035,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.194"
+version = "1.0.195"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3385e45322e8f9931410f01b3031ec534c3947d0e94c18049af4d9f9907d4e0"
+checksum = "46fe8f8603d81ba86327b23a2e9cdf49e1255fb94a4c5f297f6ee0547178ea2c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9271,9 +9271,9 @@ checksum = "dff9641d1cd4be8d1a070daf9e3773c5f67e78b4d9d42263020c057706765c04"
 
 [[package]]
 name = "winnow"
-version = "0.5.32"
+version = "0.5.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8434aeec7b290e8da5c3f0d628cb0eac6cabcb31d14bb74f779a08109a5914d6"
+checksum = "b7520bbdec7211caa7c4e682eb1fbe07abe20cee6756b6e00f537c82c11816aa"
 dependencies = [
  "memchr",
 ]
