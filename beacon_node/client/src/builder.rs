@@ -739,21 +739,20 @@ where
             .ok_or("build requires a beacon_processor_config")?;
         let log = runtime_context.log().clone();
 
+        let ctx = Arc::new(http_api::Context {
+            config: self.http_api_config.clone(),
+            chain: self.beacon_chain.clone(),
+            network_senders: self.network_senders.clone(),
+            network_globals: self.network_globals.clone(),
+            eth1_service: self.eth1_service.clone(),
+            beacon_processor_send: Some(beacon_processor_channels.beacon_processor_tx.clone()),
+            sse_logging_components: runtime_context.sse_logging_components.clone(),
+            log: log.clone(),
+        });
         let http_api_listen_addr = if self.http_api_config.enabled {
-            let ctx = Arc::new(http_api::Context {
-                config: self.http_api_config.clone(),
-                chain: self.beacon_chain.clone(),
-                network_senders: self.network_senders.clone(),
-                network_globals: self.network_globals.clone(),
-                eth1_service: self.eth1_service.clone(),
-                beacon_processor_send: Some(beacon_processor_channels.beacon_processor_tx.clone()),
-                sse_logging_components: runtime_context.sse_logging_components.clone(),
-                log: log.clone(),
-            });
-
             let exit = runtime_context.executor.exit();
 
-            let (listen_addr, server) = http_api::serve(ctx, exit)
+            let (listen_addr, server) = http_api::serve(ctx.clone(), exit)
                 .map_err(|e| format!("Unable to start HTTP API server: {:?}", e))?;
 
             let http_log = runtime_context.log().clone();
@@ -772,6 +771,20 @@ where
             info!(log, "HTTP server is disabled");
             None
         };
+
+        let log_axum = log.clone();
+        let exit = runtime_context.executor.exit();
+        let axum_http_api_task = async move {
+            http_api::serve_axum_server(ctx, exit)
+                .await
+                .unwrap();
+            debug!(log_axum, "Axum server task ended");
+        };
+
+        runtime_context
+            .clone()
+            .executor
+            .spawn_without_exit(axum_http_api_task, "axum-http-api");
 
         let http_metrics_listen_addr = if self.http_metrics_config.enabled {
             let ctx = Arc::new(http_metrics::Context {

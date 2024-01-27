@@ -7,6 +7,7 @@
 
 mod attestation_performance;
 mod attester_duties;
+mod axum_server;
 mod block_id;
 mod block_packing_efficiency;
 mod block_rewards;
@@ -297,6 +298,13 @@ fn enable(is_enabled: bool) -> impl Filter<Extract = (), Error = warp::Rejection
             }
         })
         .untuple_one()
+}
+
+pub async fn serve_axum_server<T: BeaconChainTypes>(
+    ctx: Arc<Context<T>>,
+    shutdown: impl Future<Output = ()> + Send + Sync + 'static,
+) -> Result<(), axum::Error> {
+    axum_server::serve(ctx, shutdown).await
 }
 
 /// Creates a server that will serve requests using information from `ctx`.
