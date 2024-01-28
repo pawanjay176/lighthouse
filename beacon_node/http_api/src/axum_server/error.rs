@@ -7,6 +7,7 @@ use std::io::Error as IoError;
 pub enum Error {
     Axum(AxumError),
     IoError(IoError),
+    Warp(warp::Rejection),
     BadRequest,
     NotFound,
     Other(String),
@@ -26,6 +27,11 @@ impl IntoResponse for Error {
 impl From<AxumError> for Error {
     fn from(e: AxumError) -> Self {
         Error::Axum(e)
+    }
+}
+impl From<warp::Rejection> for Error {
+    fn from(e: warp::Rejection) -> Self {
+        Error::Warp(e)
     }
 }
 

@@ -3,11 +3,12 @@ use beacon_chain::{BeaconChain, BeaconChainError, BeaconChainTypes};
 use eth2::types::StateId as CoreStateId;
 use std::fmt;
 use std::str::FromStr;
+use serde::Deserialize;
 use types::{BeaconState, Checkpoint, EthSpec, Fork, Hash256, Slot};
 
 /// Wraps `eth2::types::StateId` and provides common state-access functionality. E.g., reading
 /// states or parts of states from the database.
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct StateId(pub CoreStateId);
 
 // More clarity when returning if the state is finalized or not in the root function.

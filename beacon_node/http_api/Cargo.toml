@@ -45,11 +45,16 @@ bytes = { workspace = true }
 beacon_processor = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
 serde_json = { workspace = true }
+tower-http = { version = "0.5.1", features = ["full"] }
+tower = "0.4.13"
 
 [dev-dependencies]
 environment = { workspace = true }
 proto_array = { workspace = true }
 genesis = { workspace = true }
+http-body-util = "0.1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[test]]
 name = "bn_http_api_tests"
