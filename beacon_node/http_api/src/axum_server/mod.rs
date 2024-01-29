@@ -3,7 +3,7 @@ use axum::{
     http::{StatusCode, Uri},
     middleware::Next,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Error, Extension, Json, Router,
 };
 use beacon_chain::{BeaconChain, BeaconChainTypes};
@@ -12,7 +12,7 @@ mod error;
 mod handler;
 use super::Context;
 
-use slog::info;
+use slog::{info, Logger};
 use std::sync::Arc;
 
 use std::future::{Future, IntoFuture};
@@ -30,18 +30,12 @@ pub async fn serve<T: BeaconChainTypes>(
     Ok(())
 }
 
-/// The beacon chain state to share across all handlers
-#[derive(Clone)]
-pub(crate) struct ChainState<T: BeaconChainTypes> {
-    chain: Option<Arc<BeaconChain<T>>>,
-}
-
 // Custom `on_request` function for logging
 fn on_request() -> DefaultOnRequest {
     DefaultOnRequest::new()
 }
 
-pub fn routes<T: BeaconChainTypes>(chain_state: Arc<ChainState<T>>) -> Router {
+pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
     Router::new()
         .route("/beacon/genesis", get(handler::get_beacon_genesis::<T>))
         .route(
@@ -60,21 +54,21 @@ pub fn routes<T: BeaconChainTypes>(chain_state: Arc<ChainState<T>>) -> Router {
             "/beacon/states/:state_id/validator_balances",
             get(handler::get_beacon_state_validator_balances::<T>),
         )
+        .route(
+            "/beacon/blinded_blocks",
+            post(handler::post_beacon_blinded_blocks_json::<T>),
+        )
         .fallback(handler::catch_all)
         // .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(TraceLayer::new_for_http().on_request(on_request()))
-        .with_state(chain_state)
+        .with_state(ctx)
 }
 
 pub fn start_server<T: BeaconChainTypes>(
     ctx: Arc<Context<T>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) -> Result<impl Future<Output = Result<(), std::io::Error>> + 'static, Error> {
-    let chain_state = Arc::new(ChainState {
-        chain: ctx.chain.clone(),
-    });
-
-    let app = routes(chain_state);
+    let app = routes(ctx.clone());
 
     let addr = SocketAddr::new(ctx.config.listen_addr, ctx.config.listen_port + 1);
     let listener = TcpListener::bind(addr).unwrap();
@@ -104,6 +98,7 @@ mod tests {
         http::{self, Request, StatusCode},
     };
     use http_body_util::BodyExt;
+    use logging::test_logger;
     use serde_json::{json, Value};
     use std::{collections::HashMap, net::SocketAddr};
     use tokio::net::TcpListener;
@@ -133,15 +128,19 @@ mod tests {
         let spec = E::default_spec();
 
         let tester = InteractiveTester::<E>::new(Some(spec.clone()), validator_count).await;
-        let chain_state = Arc::new(ChainState {
-            chain: Some(tester.harness.chain.clone()),
-        });
-        let app = routes(chain_state);
+        let app = routes(tester.ctx);
+        let body = tester
+            .harness
+            .get_head_block()
+            .as_block()
+            .clone_as_blinded();
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/beacon/states/finalized/validator_balances?id=0,1")
-                    .body(Body::empty())
+                    .uri("/beacon/blinded_blocks")
+                    .method("POST")
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&body).unwrap())
                     .unwrap(),
             )
             .await
@@ -162,7 +161,7 @@ mod tests {
         #[derive(Deserialize, Default)]
         struct Temp {
             #[serde(default)]
-            id: Vec<u64>
+            id: Vec<u64>,
         }
 
         let uri: Uri = "http://example.com/path/?id=0,1".parse().unwrap();

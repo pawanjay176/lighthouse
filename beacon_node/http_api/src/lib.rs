@@ -124,6 +124,7 @@ pub struct TlsConfig {
 /// A wrapper around all the items required to spawn the HTTP server.
 ///
 /// The server will gracefully handle the case where any fields are `None`.
+#[derive(Clone)]
 pub struct Context<T: BeaconChainTypes> {
     pub config: Config,
     pub chain: Option<Arc<BeaconChain<T>>>,

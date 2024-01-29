@@ -38,6 +38,7 @@ pub struct InteractiveTester<E: EthSpec> {
     pub harness: BeaconChainHarness<EphemeralHarnessType<E>>,
     pub client: BeaconNodeHttpClient,
     pub network_rx: NetworkReceivers<E>,
+    pub ctx: Arc<Context<EphemeralHarnessType<E>>>,
 }
 
 /// The result of calling `create_api_server`.
@@ -89,12 +90,15 @@ impl<E: EthSpec> InteractiveTester<E> {
 
         let harness = harness_builder.build();
 
-        let ApiServer {
-            server,
-            listening_socket,
-            network_rx,
-            ..
-        } = create_api_server(
+        let (
+            ApiServer {
+                server,
+                listening_socket,
+                network_rx,
+                ..
+            },
+            ctx,
+        ) = create_api_server(
             harness.chain.clone(),
             &harness.runtime,
             harness.logger().clone(),
@@ -117,6 +121,7 @@ impl<E: EthSpec> InteractiveTester<E> {
             harness,
             client,
             network_rx,
+            ctx,
         }
     }
 }
@@ -125,7 +130,10 @@ pub async fn create_api_server<T: BeaconChainTypes>(
     chain: Arc<BeaconChain<T>>,
     test_runtime: &TestRuntime,
     log: Logger,
-) -> ApiServer<T::EthSpec, impl Future<Output = ()>> {
+) -> (
+    ApiServer<T::EthSpec, impl Future<Output = ()>>,
+    Arc<Context<T>>,
+) {
     // Use port 0 to allocate a new unused port.
     let port = 0;
 
@@ -221,13 +229,17 @@ pub async fn create_api_server<T: BeaconChainTypes>(
         log,
     });
 
-    let (listening_socket, server) = crate::serve(ctx, test_runtime.task_executor.exit()).unwrap();
+    let (listening_socket, server) =
+        crate::serve(ctx.clone(), test_runtime.task_executor.exit()).unwrap();
 
-    ApiServer {
-        server,
-        listening_socket,
-        network_rx: network_receivers,
-        local_enr: enr,
-        external_peer_id: peer_id,
-    }
+    (
+        ApiServer {
+            server,
+            listening_socket,
+            network_rx: network_receivers,
+            local_enr: enr,
+            external_peer_id: peer_id,
+        },
+        ctx,
+    )
 }
