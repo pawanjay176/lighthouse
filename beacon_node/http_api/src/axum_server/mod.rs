@@ -100,15 +100,15 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         )
         .route(
             "/eth/v1/validator/attestation_data",
-            get(handler::catch_all),
+            get(handler::get_validator_attestation_data::<T>),
         )
         .route(
             "/eth/v1/validator/aggregate_attestation",
-            get(handler::catch_all),
+            get(handler::get_validator_aggregate_attestation::<T>),
         )
         .route(
             "/eth/v1/validator/aggregate_and_proofs",
-            post(handler::catch_all),
+            post(handler::post_validator_aggregate_and_proofs::<T>),
         )
         .route(
             "/eth/v1/validator/beacon_committee_subscriptions",

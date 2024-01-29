@@ -2,7 +2,7 @@ use axum::extract::{Query, RawQuery};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::{extract::Path, extract::State, Json};
-use beacon_chain::attestation_verification::Error as AttnError;
+use beacon_chain::attestation_verification::{Error as AttnError, VerifiedAttestation};
 use beacon_chain::validator_monitor::timestamp_now;
 use eth2::{
     CONSENSUS_BLOCK_VALUE_HEADER, CONSENSUS_VERSION_HEADER, CONTENT_TYPE_HEADER,
@@ -10,26 +10,28 @@ use eth2::{
 };
 use lighthouse_network::{NetworkGlobals, PubsubMessage};
 use network::NetworkMessage;
-use slog::{debug, error};
+use slog::{debug, error, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
 use types::payload::BlockProductionVersion;
 use types::{
-    Attestation, ConfigAndPreset, Epoch, ForkName, ForkVersionedResponse, SignedBlindedBeaconBlock,
-    Slot, SyncCommitteeMessage, SyncDuty,
+    Attestation, AttestationData, ConfigAndPreset, Epoch, ForkName, ForkVersionedResponse, SignedAggregateAndProof, SignedBlindedBeaconBlock, Slot, SyncCommitteeMessage, SyncDuty
 };
 
 use crate::produce_block::get_randao_verification;
 use crate::state_id::StateId;
 use crate::version::{fork_versioned_response, inconsistent_fork_rejection};
 use crate::{attester_duties, build_block_contents, proposer_duties, sync_committees};
-use crate::{publish_blocks, publish_pubsub_message, Context, ProvenancedBlock};
+use crate::{
+    publish_blocks, publish_network_message, publish_pubsub_message, Context, ProvenancedBlock,
+};
 use beacon_chain::{BeaconBlockResponseWrapper, BeaconChain, BeaconChainTypes};
 use eth2::types::{
     self as api_types, BroadcastValidation, EndpointVersion, ProduceBlockV3Metadata,
-    PublishBlockRequest, SyncingData, ValidatorBalanceData, ValidatorBalancesQuery,
+    PublishBlockRequest, SyncingData, ValidatorAggregateAttestationQuery,
+    ValidatorAttestationDataQuery, ValidatorBalanceData, ValidatorBalancesQuery,
     ValidatorBlocksQuery, ValidatorIndexData,
 };
 use eth2::types::{ExecutionOptimisticFinalizedResponse, GenericResponse, GenesisData, RootData};
@@ -669,5 +671,165 @@ pub async fn get_validator_blocks_v3<T: BeaconChainTypes>(
             );
             resp
         }),
+    }
+}
+
+/// GET validator/attestation_data?slot,committee_index
+pub async fn get_validator_attestation_data<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Query(query): Query<ValidatorAttestationDataQuery>,
+) -> Result<Json<GenericResponse<AttestationData>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let current_slot = chain
+        .slot()
+        .map_err(warp_utils::reject::beacon_chain_error)
+        .map_err(HandlerError::Warp)?;
+
+    // allow a tolerance of one slot to account for clock skew
+    if query.slot > current_slot + 1 {
+        return Err(HandlerError::Warp(warp_utils::reject::custom_bad_request(
+            format!(
+                "request slot {} is more than one slot past the current slot {}",
+                query.slot, current_slot
+            ),
+        )));
+    }
+
+    chain
+        .produce_unaggregated_attestation(query.slot, query.committee_index)
+        .map(|attestation| attestation.data)
+        .map(api_types::GenericResponse::from)
+        .map(Json)
+        .map_err(warp_utils::reject::beacon_chain_error)
+        .map_err(HandlerError::Warp)
+}
+
+/// GET validator/aggregate_attestation?slot,committee_index
+pub async fn get_validator_aggregate_attestation<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Query(query): Query<ValidatorAggregateAttestationQuery>,
+) -> Result<Json<GenericResponse<Attestation<T::EthSpec>>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    chain
+        .get_aggregated_attestation_by_slot_and_root(query.slot, &query.attestation_data_root)
+        .map_err(|e| {
+            warp_utils::reject::custom_bad_request(format!("unable to fetch aggregate: {:?}", e))
+        })?
+        .map(api_types::GenericResponse::from)
+        .map(Json)
+        .ok_or_else(|| {
+            warp_utils::reject::custom_not_found("no matching aggregate found".to_string())
+        })
+        .map_err(HandlerError::Warp)
+}
+
+/// POST validator/aggregate_and_proofs
+pub async fn post_validator_aggregate_and_proofs<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Json(aggregates): Json<Vec<SignedAggregateAndProof<T::EthSpec>>>,
+) -> Result<(), HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let network_tx = network_tx(&ctx)?;
+    let log = ctx.log.clone();
+
+    let seen_timestamp = timestamp_now();
+    let mut verified_aggregates = Vec::with_capacity(aggregates.len());
+    let mut messages = Vec::with_capacity(aggregates.len());
+    let mut failures = Vec::new();
+
+    // Verify that all messages in the post are valid before processing further
+    for (index, aggregate) in aggregates.iter().enumerate() {
+        match chain.verify_aggregated_attestation_for_gossip(aggregate) {
+            Ok(verified_aggregate) => {
+                messages.push(PubsubMessage::AggregateAndProofAttestation(Box::new(
+                    verified_aggregate.aggregate().clone(),
+                )));
+
+                // Notify the validator monitor.
+                chain
+                    .validator_monitor
+                    .read()
+                    .register_api_aggregated_attestation(
+                        seen_timestamp,
+                        verified_aggregate.aggregate(),
+                        verified_aggregate.indexed_attestation(),
+                        &chain.slot_clock,
+                    );
+
+                verified_aggregates.push((index, verified_aggregate));
+            }
+            // If we already know the attestation, don't broadcast it or attempt to
+            // further verify it. Return success.
+            //
+            // It's reasonably likely that two different validators produce
+            // identical aggregates, especially if they're using the same beacon
+            // node.
+            Err(AttnError::AttestationSupersetKnown(_)) => continue,
+            // If we've already seen this aggregator produce an aggregate, just
+            // skip this one.
+            //
+            // We're likely to see this with VCs that use fallback BNs. The first
+            // BN might time-out *after* publishing the aggregate and then the
+            // second BN will indicate it's already seen the aggregate.
+            //
+            // There's no actual error for the user or the network since the
+            // aggregate has been successfully published by some other node.
+            Err(AttnError::AggregatorAlreadyKnown(_)) => continue,
+            Err(e) => {
+                error!(log,
+                    "Failure verifying aggregate and proofs";
+                    "error" => format!("{:?}", e),
+                    "request_index" => index,
+                    "aggregator_index" => aggregate.message.aggregator_index,
+                    "attestation_index" => aggregate.message.aggregate.data.index,
+                    "attestation_slot" => aggregate.message.aggregate.data.slot,
+                );
+                failures.push(api_types::Failure::new(
+                    index,
+                    format!("Verification: {:?}", e),
+                ));
+            }
+        }
+    }
+
+    // Publish aggregate attestations to the libp2p network
+    if !messages.is_empty() {
+        publish_network_message(&network_tx, NetworkMessage::Publish { messages })?;
+    }
+
+    // Import aggregate attestations
+    for (index, verified_aggregate) in verified_aggregates {
+        if let Err(e) = chain.apply_attestation_to_fork_choice(&verified_aggregate) {
+            error!(log,
+                "Failure applying verified aggregate attestation to fork choice";
+                "error" => format!("{:?}", e),
+                "request_index" => index,
+                "aggregator_index" => verified_aggregate.aggregate().message.aggregator_index,
+                "attestation_index" => verified_aggregate.attestation().data.index,
+                "attestation_slot" => verified_aggregate.attestation().data.slot,
+            );
+            failures.push(api_types::Failure::new(
+                index,
+                format!("Fork choice: {:?}", e),
+            ));
+        }
+        if let Err(e) = chain.add_to_block_inclusion_pool(verified_aggregate) {
+            warn!(
+                log,
+                "Could not add verified aggregate attestation to the inclusion pool";
+                "error" => ?e,
+                "request_index" => index,
+            );
+            failures.push(api_types::Failure::new(index, format!("Op pool: {:?}", e)));
+        }
+    }
+
+    if !failures.is_empty() {
+        Err(HandlerError::Warp(warp_utils::reject::indexed_bad_request(
+            "error processing aggregate and proofs".to_string(),
+            failures,
+        )))
+    } else {
+        Ok(())
     }
 }
