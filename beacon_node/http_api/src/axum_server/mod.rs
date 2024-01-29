@@ -32,31 +32,98 @@ fn on_request() -> DefaultOnRequest {
 
 pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
     Router::new()
-        .route("/beacon/genesis", get(handler::get_beacon_genesis::<T>))
         .route(
-            "/beacon/states/:state_id/root",
+            "/eth/v1/beacon/genesis",
+            get(handler::get_beacon_genesis::<T>),
+        )
+        .route(
+            "/eth/v1/beacon/states/:state_id/root",
             get(handler::get_beacon_state_root::<T>),
         )
         .route(
-            "/beacon/states/:state_id/fork",
+            "/eth/v1/beacon/states/:state_id/fork",
             get(handler::get_beacon_state_fork::<T>),
         )
         .route(
-            "/beacon/states/:state_id/finality_checkpoints",
+            "/eth/v1/beacon/states/:state_id/finality_checkpoints",
             get(handler::get_beacon_state_finality_checkpoints::<T>),
         )
         .route(
-            "/beacon/states/:state_id/validator_balances",
+            "/eth/v1/beacon/states/:state_id/validator_balances",
             get(handler::get_beacon_state_validator_balances::<T>),
         )
         .route(
-            "/beacon/blinded_blocks",
+            "/eth/v1/beacon/blinded_blocks",
             post(handler::post_beacon_blinded_blocks_json::<T>),
         )
         .route(
-            "/beacon/blinded_blocks",
+            "/eth/v2/beacon/blinded_blocks",
             post(handler::post_beacon_blinded_blocks_json_v2::<T>),
         )
+        .route(
+            "/eth/v1/beacon/blocks",
+            post(handler::post_beacon_blocks_json::<T>),
+        )
+        .route(
+            "/eth/v2/beacon/blocks",
+            post(handler::post_beacon_blocks_json_v2),
+        )
+        .route(
+            "/eth/v1/beacon/pool/attestations",
+            post(handler::post_beacon_pool_attestations::<T>),
+        )
+        .route(
+            "/eth/v1/beacon/pool/sync_committees",
+            post(handler::post_beacon_pool_sync_committees::<T>),
+        )
+        .route("/eth/v1/node/syncing", get(handler::get_node_syncing::<T>))
+        .route("/eth/v1/config/spec", get(handler::get_config_spec::<T>))
+        .route(
+            "/eth/v1/validator/duties/attester/:epoch",
+            post(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/duties/proposer/:epoch",
+            get(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/duties/sync/:epoch",
+            post(handler::catch_all),
+        )
+        .route("/eth/v3/validator/blocks/:slot", get(handler::catch_all))
+        .route(
+            "/eth/v1/validator/attestation_data",
+            get(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/aggregate_attestation",
+            get(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/aggregate_and_proofs",
+            post(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/beacon_committee_subscriptions",
+            post(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/sync_committee_subscriptions",
+            post(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/sync_committee_contribution",
+            get(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/contribution_and_proofs",
+            post(handler::catch_all),
+        )
+        .route(
+            "/eth/v1/validator/prepare_beacon_proposer",
+            post(handler::catch_all),
+        )
+        .route("/eth/v1/events", get(handler::catch_all))
         .fallback(handler::catch_all)
         // .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(TraceLayer::new_for_http().on_request(on_request()))
@@ -104,7 +171,7 @@ mod tests {
     use tower::{Service, ServiceExt}; // for `call`, `oneshot`, and `ready`
     use tracing::{info_span, Span};
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-    use types::{EthSpec, MainnetEthSpec};
+    use types::{EthSpec, MainnetEthSpec, SyncCommitteeMessage};
 
     use super::super::test_utils::InteractiveTester;
 
@@ -128,18 +195,14 @@ mod tests {
 
         let tester = InteractiveTester::<E>::new(Some(spec.clone()), validator_count).await;
         let app = routes(tester.ctx);
-        let body = tester
-            .harness
-            .get_head_block()
-            .as_block()
-            .clone_as_blinded();
+        let sync_msgs: Vec<SyncCommitteeMessage> = vec![];
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/beacon/blinded_blocks")
+                    .uri("/eth/v1/beacon/pool/sync_committees")
                     .method("POST")
                     .header("Content-Type", "application/json")
-                    .body(serde_json::to_string(&body).unwrap())
+                    .body(serde_json::to_string(&sync_msgs).unwrap())
                     .unwrap(),
             )
             .await
