@@ -1,26 +1,36 @@
 use axum::extract::{Query, RawQuery};
-use axum::http::HeaderMap;
-use axum::response::Response;
+use axum::http::{HeaderMap, HeaderValue};
+use axum::response::{IntoResponse, Response};
 use axum::{extract::Path, extract::State, Json};
 use beacon_chain::attestation_verification::Error as AttnError;
 use beacon_chain::validator_monitor::timestamp_now;
+use eth2::{
+    CONSENSUS_BLOCK_VALUE_HEADER, CONSENSUS_VERSION_HEADER, CONTENT_TYPE_HEADER,
+    EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER, SSZ_CONTENT_TYPE_HEADER,
+};
 use lighthouse_network::{NetworkGlobals, PubsubMessage};
 use network::NetworkMessage;
 use slog::{debug, error};
 use slot_clock::SlotClock;
+use ssz::Encode;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
+use types::payload::BlockProductionVersion;
 use types::{
-    Attestation, ConfigAndPreset, Epoch, SignedBlindedBeaconBlock, SyncCommitteeMessage, SyncDuty,
+    Attestation, ConfigAndPreset, Epoch, ForkName, ForkVersionedResponse, SignedBlindedBeaconBlock,
+    Slot, SyncCommitteeMessage, SyncDuty,
 };
 
+use crate::produce_block::get_randao_verification;
 use crate::state_id::StateId;
-use crate::{attester_duties, proposer_duties, sync_committees};
+use crate::version::{fork_versioned_response, inconsistent_fork_rejection};
+use crate::{attester_duties, build_block_contents, proposer_duties, sync_committees};
 use crate::{publish_blocks, publish_pubsub_message, Context, ProvenancedBlock};
-use beacon_chain::{BeaconChain, BeaconChainTypes};
+use beacon_chain::{BeaconBlockResponseWrapper, BeaconChain, BeaconChainTypes};
 use eth2::types::{
-    self as api_types, BroadcastValidation, PublishBlockRequest, SyncingData, ValidatorBalanceData,
-    ValidatorBalancesQuery, ValidatorIndexData,
+    self as api_types, BroadcastValidation, EndpointVersion, ProduceBlockV3Metadata,
+    PublishBlockRequest, SyncingData, ValidatorBalanceData, ValidatorBalancesQuery,
+    ValidatorBlocksQuery, ValidatorIndexData,
 };
 use eth2::types::{ExecutionOptimisticFinalizedResponse, GenericResponse, GenesisData, RootData};
 
@@ -473,8 +483,8 @@ pub async fn post_validator_duties_attester<T: BeaconChainTypes>(
         .map(Json)
 }
 
-/// POST validator/duties/proposer/{epoch}
-pub async fn post_validator_duties_proposer<T: BeaconChainTypes>(
+/// GET validator/duties/proposer/{epoch}
+pub async fn get_validator_duties_proposer<T: BeaconChainTypes>(
     State(ctx): State<Arc<Context<T>>>,
     Path(epoch): Path<Epoch>,
 ) -> Result<Json<api_types::DutiesResponse<Vec<api_types::ProposerData>>>, HandlerError> {
@@ -495,4 +505,169 @@ pub async fn post_validator_duties_sync<T: BeaconChainTypes>(
     sync_committees::sync_committee_duties(epoch, &indices.0, &chain)
         .map_err(HandlerError::Warp)
         .map(Json)
+}
+
+async fn produce_block<T: BeaconChainTypes>(
+    chain: Arc<BeaconChain<T>>,
+    slot: Slot,
+    query: api_types::ValidatorBlocksQuery,
+    version: BlockProductionVersion,
+) -> Result<(BeaconBlockResponseWrapper<T::EthSpec>, ForkName), warp::Rejection> {
+    let randao_reveal = query.randao_reveal.decompress().map_err(|e| {
+        warp_utils::reject::custom_bad_request(format!(
+            "randao reveal is not a valid BLS signature: {:?}",
+            e
+        ))
+    })?;
+    let randao_verification = get_randao_verification(&query, randao_reveal.is_infinity())?;
+
+    let block_response = chain
+        .produce_block_with_verification(
+            randao_reveal,
+            slot,
+            query.graffiti.map(Into::into),
+            randao_verification,
+            None,
+            version,
+        )
+        .await
+        .map_err(warp_utils::reject::block_production_error)?;
+    let fork_name = block_response
+        .fork_name(&chain.spec)
+        .map_err(|e| inconsistent_fork_rejection(e))?;
+    Ok((block_response, fork_name))
+}
+
+/// GET v2/validator/blocks/{slot}
+pub async fn get_validator_blocks_v2<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path(slot): Path<Slot>,
+    header_map: HeaderMap,
+    Query(query): Query<ValidatorBlocksQuery>,
+) -> Result<Response, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let accept_header = if let Some(val) = header_map.get("accept") {
+        api_types::Accept::from_str(val.to_str().map_err(|_| HandlerError::BadRequest)?).ok()
+    } else {
+        None
+    };
+    let (block_response, fork_name) =
+        produce_block(chain, slot, query, BlockProductionVersion::FullV2)
+            .await
+            .map_err(|e| HandlerError::Warp(e))?;
+
+    let block_contents = build_block_contents::build_block_contents(fork_name, block_response)?;
+    match accept_header {
+        Some(api_types::Accept::Ssz) => Response::builder()
+            .status(200)
+            .header(CONTENT_TYPE_HEADER, SSZ_CONTENT_TYPE_HEADER)
+            .header(CONSENSUS_VERSION_HEADER, fork_name.to_string())
+            .body(block_contents.as_ssz_bytes().into())
+            .map_err(|e| {
+                HandlerError::Warp(warp_utils::reject::custom_server_error(format!(
+                    "failed to create response: {}",
+                    e
+                )))
+            }),
+        _ => Ok(Json(
+            fork_versioned_response(EndpointVersion(2), fork_name, block_contents)
+                .map_err(HandlerError::Warp)?,
+        )
+        .into_response())
+        .map(|mut resp| {
+            let headers = resp.headers_mut();
+            headers.insert(
+                CONSENSUS_VERSION_HEADER,
+                HeaderValue::from_str(&fork_name.to_string()).expect("valid header value"),
+            );
+            resp
+        }),
+    }
+}
+
+/// GET v3/validator/blocks/{slot}
+pub async fn get_validator_blocks_v3<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path(slot): Path<Slot>,
+    header_map: HeaderMap,
+    Query(query): Query<ValidatorBlocksQuery>,
+) -> Result<Response, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let accept_header = if let Some(val) = header_map.get("accept") {
+        api_types::Accept::from_str(val.to_str().map_err(|_| HandlerError::BadRequest)?).ok()
+    } else {
+        None
+    };
+    let (block_response, fork_name) =
+        produce_block(chain, slot, query, BlockProductionVersion::FullV2)
+            .await
+            .map_err(HandlerError::Warp)?;
+
+    let execution_payload_value = block_response.execution_payload_value();
+    let consensus_block_value = block_response.consensus_block_value_wei();
+    let execution_payload_blinded = block_response.is_blinded();
+
+    let metadata = ProduceBlockV3Metadata {
+        consensus_version: fork_name,
+        execution_payload_blinded,
+        execution_payload_value,
+        consensus_block_value,
+    };
+
+    let block_contents = build_block_contents::build_block_contents(fork_name, block_response)?;
+
+    match accept_header {
+        Some(api_types::Accept::Ssz) => Response::builder()
+            .status(200)
+            .header(CONTENT_TYPE_HEADER, SSZ_CONTENT_TYPE_HEADER)
+            .header(CONSENSUS_VERSION_HEADER, fork_name.to_string())
+            .header(
+                EXECUTION_PAYLOAD_BLINDED_HEADER,
+                execution_payload_blinded.to_string(),
+            )
+            .header(
+                EXECUTION_PAYLOAD_VALUE_HEADER,
+                execution_payload_value.to_string(),
+            )
+            .header(
+                CONSENSUS_BLOCK_VALUE_HEADER,
+                consensus_block_value.to_string(),
+            )
+            .body(block_contents.as_ssz_bytes().into())
+            .map_err(|e| {
+                HandlerError::Warp(warp_utils::reject::custom_server_error(format!(
+                    "failed to create response: {}",
+                    e
+                )))
+            }),
+        _ => Ok(Json(ForkVersionedResponse {
+            version: Some(fork_name),
+            metadata,
+            data: block_contents,
+        })
+        .into_response())
+        .map(|mut resp| {
+            let headers = resp.headers_mut();
+            headers.insert(
+                CONSENSUS_VERSION_HEADER,
+                HeaderValue::from_str(&fork_name.to_string()).expect("valid header value"),
+            );
+            headers.insert(
+                EXECUTION_PAYLOAD_BLINDED_HEADER,
+                HeaderValue::from_str(&execution_payload_blinded.to_string())
+                    .expect("valid header value"),
+            );
+            headers.insert(
+                EXECUTION_PAYLOAD_VALUE_HEADER,
+                HeaderValue::from_str(&execution_payload_value.to_string())
+                    .expect("valid header value"),
+            );
+            headers.insert(
+                CONSENSUS_BLOCK_VALUE_HEADER,
+                HeaderValue::from_str(&consensus_block_value.to_string())
+                    .expect("valid header value"),
+            );
+            resp
+        }),
+    }
 }

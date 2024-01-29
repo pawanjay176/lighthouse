@@ -90,7 +90,14 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
             "/eth/v1/validator/duties/sync/:epoch",
             post(handler::post_validator_duties_sync::<T>),
         )
-        .route("/eth/v3/validator/blocks/:slot", get(handler::catch_all))
+        .route(
+            "/eth/v2/validator/blocks/:slot",
+            get(handler::get_validator_blocks_v2::<T>),
+        )
+        .route(
+            "/eth/v3/validator/blocks/:slot",
+            get(handler::get_validator_blocks_v3::<T>),
+        )
         .route(
             "/eth/v1/validator/attestation_data",
             get(handler::catch_all),
