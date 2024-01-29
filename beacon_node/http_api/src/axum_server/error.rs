@@ -9,7 +9,6 @@ pub enum Error {
     IoError(IoError),
     Warp(warp::Rejection),
     BadRequest,
-    NotFound,
     Other(String),
 }
 
@@ -17,7 +16,6 @@ impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let (status, error_message) = match self {
             Self::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request"),
-            Self::NotFound => (StatusCode::NOT_FOUND, "Not Found"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         };
         (status, Json(json!({ "error": error_message }))).into_response()

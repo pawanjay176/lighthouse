@@ -9,15 +9,19 @@ use eth2::{
     EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER, SSZ_CONTENT_TYPE_HEADER,
 };
 use lighthouse_network::{NetworkGlobals, PubsubMessage};
-use network::NetworkMessage;
+use network::{NetworkMessage, ValidatorSubscriptionMessage};
 use slog::{debug, error, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
 use std::{str::FromStr, sync::Arc};
+use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::UnboundedSender;
 use types::payload::BlockProductionVersion;
 use types::{
-    Attestation, AttestationData, ConfigAndPreset, Epoch, ForkName, ForkVersionedResponse, SignedAggregateAndProof, SignedBlindedBeaconBlock, Slot, SyncCommitteeMessage, SyncDuty
+    Attestation, AttestationData, ConfigAndPreset, Epoch, EthSpec, ForkName, ForkVersionedResponse,
+    ProposerPreparationData, SignedAggregateAndProof, SignedBlindedBeaconBlock,
+    SignedContributionAndProof, Slot, SyncCommitteeContribution, SyncCommitteeMessage,
+    SyncContributionData, SyncDuty,
 };
 
 use crate::produce_block::get_randao_verification;
@@ -27,7 +31,7 @@ use crate::{attester_duties, build_block_contents, proposer_duties, sync_committ
 use crate::{
     publish_blocks, publish_network_message, publish_pubsub_message, Context, ProvenancedBlock,
 };
-use beacon_chain::{BeaconBlockResponseWrapper, BeaconChain, BeaconChainTypes};
+use beacon_chain::{BeaconBlockResponseWrapper, BeaconChain, BeaconChainError, BeaconChainTypes};
 use eth2::types::{
     self as api_types, BroadcastValidation, EndpointVersion, ProduceBlockV3Metadata,
     PublishBlockRequest, SyncingData, ValidatorAggregateAttestationQuery,
@@ -57,6 +61,19 @@ fn network_tx<T: BeaconChainTypes>(
 ) -> Result<UnboundedSender<NetworkMessage<T::EthSpec>>, HandlerError> {
     if let Some(network_tx) = &ctx.network_senders {
         Ok(network_tx.network_send())
+    } else {
+        return Err(HandlerError::Other(
+            "The networking stack has not yet started (network_tx).".to_string(),
+        ));
+    }
+}
+
+/// Returns the `Network` channel sender otherwise returns an error
+fn validator_subscription_tx<T: BeaconChainTypes>(
+    ctx: &Context<T>,
+) -> Result<Sender<ValidatorSubscriptionMessage>, HandlerError> {
+    if let Some(network_tx) = &ctx.network_senders {
+        Ok(network_tx.validator_subscription_send())
     } else {
         return Err(HandlerError::Other(
             "The networking stack has not yet started (network_tx).".to_string(),
@@ -832,4 +849,165 @@ pub async fn post_validator_aggregate_and_proofs<T: BeaconChainTypes>(
     } else {
         Ok(())
     }
+}
+
+/// POST validator/beacon_committee_subscriptions
+pub async fn post_validator_beacon_committee_subscriptions<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Json(subscriptions): Json<Vec<api_types::BeaconCommitteeSubscription>>,
+) -> Result<(), HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let log = ctx.log.clone();
+    let validator_subscription_tx = validator_subscription_tx(&ctx)?;
+
+    for subscription in &subscriptions {
+        chain
+            .validator_monitor
+            .write()
+            .auto_register_local_validator(subscription.validator_index);
+
+        let validator_subscription = api_types::ValidatorSubscription {
+            validator_index: subscription.validator_index,
+            attestation_committee_index: subscription.committee_index,
+            slot: subscription.slot,
+            committee_count_at_slot: subscription.committees_at_slot,
+            is_aggregator: subscription.is_aggregator,
+        };
+
+        let message = ValidatorSubscriptionMessage::AttestationSubscribe {
+            subscriptions: vec![validator_subscription],
+        };
+        if let Err(e) = validator_subscription_tx.try_send(message) {
+            warn!(
+                log,
+                "Unable to process committee subscriptions";
+                "info" => "the host may be overloaded or resource-constrained",
+                "error" => ?e,
+            );
+            return Err(HandlerError::Warp(warp_utils::reject::custom_server_error(
+                "unable to queue subscription, host may be overloaded or shutting down".to_string(),
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// POST validator/sync_committee_subscriptions
+pub async fn post_validator_sync_committee_subscriptions<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Json(subscriptions): Json<Vec<types::SyncCommitteeSubscription>>,
+) -> Result<(), HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let log = ctx.log.clone();
+    let validator_subscription_tx = validator_subscription_tx(&ctx)?;
+
+    for subscription in subscriptions {
+        chain
+            .validator_monitor
+            .write()
+            .auto_register_local_validator(subscription.validator_index);
+
+        let message = ValidatorSubscriptionMessage::SyncCommitteeSubscribe {
+            subscriptions: vec![subscription],
+        };
+        if let Err(e) = validator_subscription_tx.try_send(message) {
+            warn!(
+                log,
+                "Unable to process sync subscriptions";
+                "info" => "the host may be overloaded or resource-constrained",
+                "error" => ?e
+            );
+            return Err(HandlerError::Warp(warp_utils::reject::custom_server_error(
+                "unable to queue subscription, host may be overloaded or shutting down".to_string(),
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// GET validator/sync_committee_contribution
+pub async fn get_validator_sync_committee_contribution<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Query(sync_committee_data): Query<SyncContributionData>,
+) -> Result<Json<GenericResponse<SyncCommitteeContribution<T::EthSpec>>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+
+    chain
+        .get_aggregated_sync_committee_contribution(&sync_committee_data)
+        .map_err(|e| {
+            warp_utils::reject::custom_bad_request(format!(
+                "unable to fetch sync contribution: {:?}",
+                e
+            ))
+        })?
+        .map(api_types::GenericResponse::from)
+        .map(Json)
+        .ok_or_else(|| {
+            warp_utils::reject::custom_not_found("no matching sync contribution found".to_string())
+        })
+        .map_err(HandlerError::Warp)
+}
+
+/// GET validator/contribution_and_proofs
+pub async fn post_validator_contribution_and_proofs<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Json(contributions): Json<Vec<SignedContributionAndProof<T::EthSpec>>>,
+) -> Result<(), HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let network_tx = network_tx(&ctx)?;
+    let log = ctx.log.clone();
+
+    sync_committees::process_signed_contribution_and_proofs(
+        contributions,
+        network_tx,
+        &chain,
+        log,
+    )?;
+    Ok(())
+}
+
+/// POST validator/prepare_beacon_proposer
+pub async fn post_validator_prepare_beacon_proposer<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Json(preparation_data): Json<Vec<ProposerPreparationData>>,
+) -> Result<(), HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let log = ctx.log.clone();
+
+    let execution_layer = chain
+        .execution_layer
+        .as_ref()
+        .ok_or(BeaconChainError::ExecutionLayerMissing)
+        .map_err(warp_utils::reject::beacon_chain_error)
+        .map_err(HandlerError::Warp)?;
+
+    let current_slot = chain
+        .slot()
+        .map_err(warp_utils::reject::beacon_chain_error)
+        .map_err(HandlerError::Warp)?;
+    let current_epoch = current_slot.epoch(T::EthSpec::slots_per_epoch());
+
+    debug!(
+        log,
+        "Received proposer preparation data";
+        "count" => preparation_data.len(),
+    );
+
+    execution_layer
+        .update_proposer_preparation(current_epoch, &preparation_data)
+        .await;
+
+    chain
+        .prepare_beacon_proposer(current_slot)
+        .await
+        .map_err(|e| {
+            warp_utils::reject::custom_bad_request(format!(
+                "error updating proposer preparations: {:?}",
+                e
+            ))
+        })?;
+
+    Ok(())
 }

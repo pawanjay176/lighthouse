@@ -112,23 +112,23 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         )
         .route(
             "/eth/v1/validator/beacon_committee_subscriptions",
-            post(handler::catch_all),
+            post(handler::post_validator_beacon_committee_subscriptions::<T>),
         )
         .route(
             "/eth/v1/validator/sync_committee_subscriptions",
-            post(handler::catch_all),
+            post(handler::post_validator_sync_committee_subscriptions::<T>),
         )
         .route(
             "/eth/v1/validator/sync_committee_contribution",
-            get(handler::catch_all),
+            get(handler::get_validator_sync_committee_contribution::<T>),
         )
         .route(
             "/eth/v1/validator/contribution_and_proofs",
-            post(handler::catch_all),
+            post(handler::post_validator_contribution_and_proofs::<T>),
         )
         .route(
             "/eth/v1/validator/prepare_beacon_proposer",
-            post(handler::catch_all),
+            post(handler::post_validator_prepare_beacon_proposer::<T>),
         )
         .route("/eth/v1/events", get(handler::catch_all))
         .fallback(handler::catch_all)
