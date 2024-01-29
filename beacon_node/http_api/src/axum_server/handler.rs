@@ -1,19 +1,17 @@
-use axum::extract::RawQuery;
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Query, RawQuery};
+use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::{debug_handler, extract::Path, extract::State, Error, Extension, Json};
-use network::{NetworkMessage, NetworkSenders};
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use axum::{extract::Path, extract::State, Json};
+use network::NetworkMessage;
+use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
 use types::SignedBlindedBeaconBlock;
-use warp::reply::Reply;
 
+use crate::state_id::StateId;
 use crate::{publish_blocks, Context};
-use crate::{state_id::StateId, validator};
 use beacon_chain::{BeaconChain, BeaconChainTypes};
 use eth2::types::{
     self as api_types, BroadcastValidation, ValidatorBalanceData, ValidatorBalancesQuery,
-    ValidatorId,
 };
 use eth2::types::{ExecutionOptimisticFinalizedResponse, GenericResponse, GenesisData, RootData};
 
@@ -152,24 +150,44 @@ pub async fn get_beacon_state_validator_balances<T: BeaconChainTypes>(
     .map(Json)
 }
 
-// TODO: investigate merging ssz and json handlers
+/// TODO: investigate merging ssz and json handlers
+/// beacon/blinded_blocks
 pub async fn post_beacon_blinded_blocks_json<T: BeaconChainTypes>(
     State(ctx): State<Arc<Context<T>>>,
-    header_map: HeaderMap,
+    _header_map: HeaderMap,
     Json(block_contents): Json<Arc<SignedBlindedBeaconBlock<T::EthSpec>>>,
 ) -> Result<Response, HandlerError> {
-    dbg!("hello");
     let chain = chain_filter(&ctx)?;
-    dbg!("hello");
     let network_tx = network_tx(&ctx)?;
     let log = ctx.log.clone();
-    dbg!("hello");
-    let warp_response = publish_blocks::publish_blinded_block(
+    let _warp_response = publish_blocks::publish_blinded_block(
         block_contents,
         chain,
         &network_tx,
         log,
         BroadcastValidation::default(),
+        ctx.config.duplicate_block_status_code,
+    )
+    .await?;
+    Ok(Response::new(().into()))
+}
+
+/// v2/beacon/blinded_blocks
+pub async fn post_beacon_blinded_blocks_json_v2<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    _header_map: HeaderMap,
+    Query(validation_level): Query<api_types::BroadcastValidationQuery>,
+    Json(block_contents): Json<Arc<SignedBlindedBeaconBlock<T::EthSpec>>>,
+) -> Result<Response, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let network_tx = network_tx(&ctx)?;
+    let log = ctx.log.clone();
+    let _warp_response = publish_blocks::publish_blinded_block(
+        block_contents,
+        chain,
+        &network_tx,
+        log,
+        validation_level.broadcast_validation,
         ctx.config.duplicate_block_status_code,
     )
     .await?;

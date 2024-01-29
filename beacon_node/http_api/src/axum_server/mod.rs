@@ -1,23 +1,18 @@
 use axum::{
-    extract::Request,
-    http::{StatusCode, Uri},
-    middleware::Next,
-    response::IntoResponse,
     routing::{get, post},
-    Error, Extension, Json, Router,
+    Error, Router,
 };
-use beacon_chain::{BeaconChain, BeaconChainTypes};
+use beacon_chain::BeaconChainTypes;
 
 mod error;
 mod handler;
 use super::Context;
 
-use slog::{info, Logger};
+use slog::info;
 use std::sync::Arc;
 
 use std::future::{Future, IntoFuture};
 use std::net::{SocketAddr, TcpListener};
-use tower::ServiceBuilder;
 use tower_http::trace::{DefaultOnRequest, TraceLayer};
 
 pub async fn serve<T: BeaconChainTypes>(
@@ -57,6 +52,10 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         .route(
             "/beacon/blinded_blocks",
             post(handler::post_beacon_blinded_blocks_json::<T>),
+        )
+        .route(
+            "/beacon/blinded_blocks",
+            post(handler::post_beacon_blinded_blocks_json_v2::<T>),
         )
         .fallback(handler::catch_all)
         // .layer(tower_http::trace::TraceLayer::new_for_http())
