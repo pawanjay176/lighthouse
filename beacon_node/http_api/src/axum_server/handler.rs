@@ -10,14 +10,17 @@ use slog::{debug, error};
 use slot_clock::SlotClock;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
-use types::{Attestation, ConfigAndPreset, SignedBlindedBeaconBlock, SyncCommitteeMessage};
+use types::{
+    Attestation, ConfigAndPreset, Epoch, SignedBlindedBeaconBlock, SyncCommitteeMessage, SyncDuty,
+};
 
 use crate::state_id::StateId;
-use crate::{publish_blocks, publish_pubsub_message, sync_committees, Context, ProvenancedBlock};
+use crate::{attester_duties, proposer_duties, sync_committees};
+use crate::{publish_blocks, publish_pubsub_message, Context, ProvenancedBlock};
 use beacon_chain::{BeaconChain, BeaconChainTypes};
 use eth2::types::{
     self as api_types, BroadcastValidation, PublishBlockRequest, SyncingData, ValidatorBalanceData,
-    ValidatorBalancesQuery,
+    ValidatorBalancesQuery, ValidatorIndexData,
 };
 use eth2::types::{ExecutionOptimisticFinalizedResponse, GenericResponse, GenesisData, RootData};
 
@@ -456,4 +459,40 @@ pub async fn get_config_spec<T: BeaconChainTypes>(
     let config_and_preset =
         ConfigAndPreset::from_chain_spec::<T::EthSpec>(&chain.spec, spec_fork_name);
     Ok(api_types::GenericResponse::from(config_and_preset)).map(Json)
+}
+
+/// POST validator/duties/attester/{epoch}
+pub async fn post_validator_duties_attester<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path(epoch): Path<Epoch>,
+    Json(indices): Json<ValidatorIndexData>,
+) -> Result<Json<api_types::DutiesResponse<Vec<api_types::AttesterData>>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    attester_duties::attester_duties(epoch, &indices.0, &chain)
+        .map_err(HandlerError::Warp)
+        .map(Json)
+}
+
+/// POST validator/duties/proposer/{epoch}
+pub async fn post_validator_duties_proposer<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path(epoch): Path<Epoch>,
+) -> Result<Json<api_types::DutiesResponse<Vec<api_types::ProposerData>>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let log = ctx.log.clone();
+    proposer_duties::proposer_duties(epoch, &chain, &log)
+        .map_err(HandlerError::Warp)
+        .map(Json)
+}
+
+/// POST validator/duties/sync/{epoch}
+pub async fn post_validator_duties_sync<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path(epoch): Path<Epoch>,
+    Json(indices): Json<ValidatorIndexData>,
+) -> Result<Json<api_types::ExecutionOptimisticResponse<Vec<SyncDuty>>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    sync_committees::sync_committee_duties(epoch, &indices.0, &chain)
+        .map_err(HandlerError::Warp)
+        .map(Json)
 }

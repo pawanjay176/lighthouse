@@ -80,15 +80,15 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         .route("/eth/v1/config/spec", get(handler::get_config_spec::<T>))
         .route(
             "/eth/v1/validator/duties/attester/:epoch",
-            post(handler::catch_all),
+            post(handler::post_validator_duties_attester::<T>),
         )
         .route(
             "/eth/v1/validator/duties/proposer/:epoch",
-            get(handler::catch_all),
+            get(handler::get_validator_duties_proposer::<T>),
         )
         .route(
             "/eth/v1/validator/duties/sync/:epoch",
-            post(handler::catch_all),
+            post(handler::post_validator_duties_sync::<T>),
         )
         .route("/eth/v3/validator/blocks/:slot", get(handler::catch_all))
         .route(
