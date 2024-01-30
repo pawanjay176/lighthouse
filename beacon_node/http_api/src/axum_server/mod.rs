@@ -37,6 +37,10 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
             get(handler::get_beacon_genesis::<T>),
         )
         .route(
+            "/eth/v1/beacon/blocks/:block_id/root",
+            get(handler::get_beacon_blocks_root::<T>),
+        )
+        .route(
             "/eth/v1/beacon/states/:state_id/root",
             get(handler::get_beacon_state_root::<T>),
         )
@@ -51,6 +55,10 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         .route(
             "/eth/v1/beacon/states/:state_id/validator_balances",
             get(handler::get_beacon_state_validator_balances::<T>),
+        )
+        .route(
+            "/eth/v1/beacon/states/:state_id/validators/:validator_id",
+            get(handler::get_beacon_state_validators_id::<T>),
         )
         .route(
             "/eth/v1/beacon/blinded_blocks",
@@ -77,6 +85,7 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
             post(handler::post_beacon_pool_sync_committees::<T>),
         )
         .route("/eth/v1/node/syncing", get(handler::get_node_syncing::<T>))
+        .route("/eth/v1/node/version", get(handler::get_node_version))
         .route("/eth/v1/config/spec", get(handler::get_config_spec::<T>))
         .route(
             "/eth/v1/validator/duties/attester/:epoch",
@@ -202,14 +211,13 @@ mod tests {
 
         let tester = InteractiveTester::<E>::new(Some(spec.clone()), validator_count).await;
         let app = routes(tester.ctx);
-        let sync_msgs: Vec<SyncCommitteeMessage> = vec![];
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/eth/v1/beacon/pool/sync_committees")
-                    .method("POST")
+                    .uri("/eth/v1/beacon/blocks/head/root")
+                    .method("GET")
                     .header("Content-Type", "application/json")
-                    .body(serde_json::to_string(&sync_msgs).unwrap())
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await

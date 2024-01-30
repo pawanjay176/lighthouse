@@ -1,7 +1,7 @@
 use axum::extract::{Query, RawQuery};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
-use axum::{extract::Path, extract::State, Json};
+use axum::{extract::Path, extract::Request, extract::State, Json};
 use beacon_chain::attestation_verification::{Error as AttnError, VerifiedAttestation};
 use beacon_chain::validator_monitor::timestamp_now;
 use eth2::{
@@ -9,6 +9,7 @@ use eth2::{
     EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER, SSZ_CONTENT_TYPE_HEADER,
 };
 use lighthouse_network::{NetworkGlobals, PubsubMessage};
+use lighthouse_version::version_with_platform;
 use network::{NetworkMessage, ValidatorSubscriptionMessage};
 use slog::{debug, error, warn};
 use slot_clock::SlotClock;
@@ -26,8 +27,9 @@ use types::{
 
 use crate::produce_block::get_randao_verification;
 use crate::state_id::StateId;
+use crate::validator::pubkey_to_validator_index;
 use crate::version::{fork_versioned_response, inconsistent_fork_rejection};
-use crate::{attester_duties, build_block_contents, proposer_duties, sync_committees};
+use crate::{attester_duties, build_block_contents, proposer_duties, sync_committees, BlockId};
 use crate::{
     publish_blocks, publish_network_message, publish_pubsub_message, Context, ProvenancedBlock,
 };
@@ -36,7 +38,7 @@ use eth2::types::{
     self as api_types, BroadcastValidation, EndpointVersion, ProduceBlockV3Metadata,
     PublishBlockRequest, SyncingData, ValidatorAggregateAttestationQuery,
     ValidatorAttestationDataQuery, ValidatorBalanceData, ValidatorBalancesQuery,
-    ValidatorBlocksQuery, ValidatorIndexData,
+    ValidatorBlocksQuery, ValidatorData, ValidatorId, ValidatorIndexData, VersionData,
 };
 use eth2::types::{ExecutionOptimisticFinalizedResponse, GenericResponse, GenesisData, RootData};
 
@@ -94,9 +96,13 @@ fn network_globals<T: BeaconChainTypes>(
     }
 }
 
-pub async fn catch_all() -> &'static str {
-    dbg!("yaha aaya");
-    "whoaaa"
+pub async fn catch_all(req: Request<axum::body::Body>) -> &'static str {
+    let uri = req.uri().to_string();
+    let body = req.body();
+    dbg!("URI accessed: {}", uri);
+    dbg!("Body accessed: {}", body);
+
+    "woo"
 }
 
 /// GET beacon/genesis
@@ -110,6 +116,21 @@ pub async fn get_beacon_genesis<T: BeaconChainTypes>(
         genesis_fork_version: chain.spec.genesis_fork_version,
     };
     Ok(Json(GenericResponse::from(genesis_data)))
+}
+
+/// GET beacon/blocks/{block_id}/root
+pub async fn get_beacon_blocks_root<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path(block_id): Path<String>,
+) -> Result<Json<ExecutionOptimisticFinalizedResponse<RootData>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let block_id = BlockId::from_str(&block_id)?;
+    let (block_root, execution_optimistic, finalized) = block_id.root(&chain)?;
+    Ok(
+        api_types::GenericResponse::from(api_types::RootData::from(block_root))
+            .add_execution_optimistic_finalized(execution_optimistic, finalized),
+    )
+    .map(Json)
 }
 
 /// GET beacon/states/{state_id}/root
@@ -198,6 +219,69 @@ pub async fn get_beacon_state_validator_balances<T: BeaconChainTypes>(
         validator_queries.as_deref(),
     )
     .map_err(HandlerError::Warp)
+    .map(Json)
+}
+
+/// GET beacon/states/{state_id}/validators/{validator_id}
+pub async fn get_beacon_state_validators_id<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    Path((state_id, validator_id)): Path<(String, ValidatorId)>,
+) -> Result<Json<ExecutionOptimisticFinalizedResponse<ValidatorData>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let state_id = StateId::from_str(&state_id)?;
+
+    let (data, execution_optimistic, finalized) = state_id
+        .map_state_and_execution_optimistic_and_finalized(
+            &chain,
+            |state, execution_optimistic, finalized| {
+                let index_opt = match &validator_id {
+                    ValidatorId::PublicKey(pubkey) => {
+                        pubkey_to_validator_index(&chain, state, pubkey).map_err(|e| {
+                            warp_utils::reject::custom_not_found(format!(
+                                "unable to access pubkey cache: {e:?}",
+                            ))
+                        })?
+                    }
+                    ValidatorId::Index(index) => Some(*index as usize),
+                };
+
+                Ok((
+                    index_opt
+                        .and_then(|index| {
+                            let validator = state.validators().get(index)?;
+                            let balance = *state.balances().get(index)?;
+                            let epoch = state.current_epoch();
+                            let far_future_epoch = chain.spec.far_future_epoch;
+
+                            Some(api_types::ValidatorData {
+                                index: index as u64,
+                                balance,
+                                status: api_types::ValidatorStatus::from_validator(
+                                    validator,
+                                    epoch,
+                                    far_future_epoch,
+                                ),
+                                validator: validator.clone(),
+                            })
+                        })
+                        .ok_or_else(|| {
+                            warp_utils::reject::custom_not_found(format!(
+                                "unknown validator: {}",
+                                validator_id
+                            ))
+                        })?,
+                    execution_optimistic,
+                    finalized,
+                ))
+            },
+        )
+        .map_err(HandlerError::Warp)?;
+
+    Ok(api_types::ExecutionOptimisticFinalizedResponse {
+        data,
+        execution_optimistic: Some(execution_optimistic),
+        finalized: Some(finalized),
+    })
     .map(Json)
 }
 
@@ -477,6 +561,14 @@ pub async fn get_node_syncing<T: BeaconChainTypes>(
     };
 
     Ok(api_types::GenericResponse::from(syncing_data)).map(Json)
+}
+
+/// GET config/spec
+pub async fn get_node_version() -> Result<Json<GenericResponse<VersionData>>, HandlerError> {
+    Ok(api_types::GenericResponse::from(VersionData {
+        version: version_with_platform(),
+    }))
+    .map(Json)
 }
 
 /// GET node/syncing
