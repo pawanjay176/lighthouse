@@ -132,18 +132,21 @@ done
 sleeping 20
 
 # Reset the `genesis.json` config file fork times.
-sed -i 's/"shanghaiTime".*$/"shanghaiTime": 0,/g' $genesis_file
-sed -i 's/"cancunTime".*$/"cancunTime": 0,/g' $genesis_file
+gsed -i 's/"shanghaiTime".*$/"shanghaiTime": 0,/g' $genesis_file
+gsed -i 's/"cancunTime".*$/"cancunTime": 0,/g' $genesis_file
 
 for (( bn=1; bn<=$BN_COUNT; bn++ )); do
     secret=$DATADIR/geth_datadir$bn/geth/jwtsecret
+    http_port=$((BN_http_port_base + 100 * bn))
+    echo $http_port
     echo $secret
-    execute_command_add_PID beacon_node_$bn.log ./beacon_node.sh $SAS -d $DEBUG_LEVEL $DATADIR/node_$bn $((BN_udp_tcp_base + $bn)) $((BN_udp_tcp_base + $bn + 100)) $((BN_http_port_base + $bn)) http://localhost:$((EL_base_auth_http + $bn)) $secret
+    execute_command_add_PID beacon_node_$bn.log ./beacon_node.sh $SAS -d $DEBUG_LEVEL $DATADIR/node_$bn $((BN_udp_tcp_base + $bn)) $((BN_udp_tcp_base + $bn + 100)) $http_port http://localhost:$((EL_base_auth_http + $bn)) $secret
 done
 
 # Start requested number of validator clients
 for (( vc=1; vc<=$VC_COUNT; vc++ )); do
-    execute_command_add_PID validator_node_$vc.log ./validator_client.sh $BUILDER_PROPOSALS -d $DEBUG_LEVEL $DATADIR/node_$vc http://localhost:$((BN_http_port_base + $vc))
+    http_port=$((BN_http_port_base + 100 * vc +1))
+    execute_command_add_PID validator_node_$vc.log ./validator_client.sh $BUILDER_PROPOSALS -d $DEBUG_LEVEL $DATADIR/node_$vc http://localhost:$http_port
 done
 
 echo "Started!"
