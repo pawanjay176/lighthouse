@@ -1,6 +1,7 @@
 use axum::{
+    http::{header::CONTENT_TYPE, HeaderValue, Method},
     routing::{get, post},
-    Error, Router,
+    Router,
 };
 use beacon_chain::BeaconChainTypes;
 
@@ -9,16 +10,20 @@ mod handler;
 use super::Context;
 
 use slog::info;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use std::future::{Future, IntoFuture};
 use std::net::{SocketAddr, TcpListener};
-use tower_http::trace::{DefaultOnRequest, TraceLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::{DefaultOnRequest, TraceLayer},
+};
 
 pub async fn serve<T: BeaconChainTypes>(
     ctx: Arc<Context<T>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
-) -> Result<(), Error> {
+) -> Result<(), String> {
     let server = start_server(ctx, shutdown)?;
     let _ = server.await;
 
@@ -146,17 +151,70 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         .with_state(ctx)
 }
 
+fn cors_layer(
+    allow_origin: Option<String>,
+    listen_addr: IpAddr,
+    listen_port: u16,
+) -> Result<CorsLayer, String> {
+    // Configure CORS.
+    let origins: AllowOrigin = if let Some(allow_origin) = allow_origin {
+        let mut origins: Vec<HeaderValue> = Vec::new();
+        for origin in allow_origin.split(",") {
+            if origin == "*" {
+                return Ok(CorsLayer::new()
+                    .allow_methods([Method::GET, Method::POST])
+                    .allow_headers([CONTENT_TYPE])
+                    .allow_origin(AllowOrigin::any()));
+            }
+            origins.push(
+                origin
+                    .parse::<HeaderValue>()
+                    .map_err(|e| format!("Invalid origins header: {:?}", e))?,
+            );
+        }
+        origins.into()
+    } else {
+        let origin = match listen_addr {
+            IpAddr::V4(_) => format!("http://{}:{}", listen_addr, listen_port),
+            IpAddr::V6(_) => format!("http://[{}]:{}", listen_addr, listen_port),
+        };
+        vec![origin
+            .parse::<HeaderValue>()
+            .map_err(|e| format!("Invalid origins header: {:?}", e))?]
+        .into()
+    };
+
+    let cors_layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([CONTENT_TYPE])
+        .allow_origin(origins);
+    Ok(cors_layer)
+}
+
 pub fn start_server<T: BeaconChainTypes>(
     ctx: Arc<Context<T>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
-) -> Result<impl Future<Output = Result<(), std::io::Error>> + 'static, Error> {
-    let app = routes(ctx.clone());
+) -> Result<impl Future<Output = Result<(), std::io::Error>> + 'static, String> {
+    let config = ctx.config.clone();
+
+    let app = routes(ctx.clone()).layer(cors_layer(
+        config.allow_origin,
+        config.listen_addr,
+        config.listen_port,
+    )?);
 
     let addr = SocketAddr::new(ctx.config.listen_addr, ctx.config.listen_port + 1);
-    let listener = TcpListener::bind(addr).unwrap();
-    listener.set_nonblocking(true).unwrap();
+    let listener =
+        TcpListener::bind(addr).map_err(|e| format!("Failed to bind to address: {:?}", e))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("Failed to set to non blocking: {:?}", e))?;
 
-    let serve = axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app);
+    let serve = axum::serve(
+        tokio::net::TcpListener::from_std(listener)
+            .map_err(|e| format!("Failed to start tcp listener: {:?}", e))?,
+        app.into_make_service(),
+    );
     let log = ctx.log.clone();
 
     info!(

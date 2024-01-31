@@ -304,7 +304,7 @@ fn enable(is_enabled: bool) -> impl Filter<Extract = (), Error = warp::Rejection
 pub async fn serve_axum_server<T: BeaconChainTypes>(
     ctx: Arc<Context<T>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
-) -> Result<(), axum::Error> {
+) -> Result<(), String> {
     axum_server::serve(ctx, shutdown).await
 }
 
