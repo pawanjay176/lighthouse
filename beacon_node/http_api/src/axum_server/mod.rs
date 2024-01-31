@@ -139,7 +139,7 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
             "/eth/v1/validator/prepare_beacon_proposer",
             post(handler::post_validator_prepare_beacon_proposer::<T>),
         )
-        .route("/eth/v1/events", get(handler::catch_all))
+        .route("/eth/v1/events", get(handler::get_events::<T>))
         .fallback(handler::catch_all)
         // .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(TraceLayer::new_for_http().on_request(on_request()))
@@ -180,6 +180,7 @@ mod tests {
         http::{self, Request, StatusCode},
     };
     use http_body_util::BodyExt;
+    use lighthouse_network::service::api_types;
     use logging::test_logger;
     use serde_json::{json, Value};
     use std::{collections::HashMap, net::SocketAddr};
@@ -235,14 +236,8 @@ mod tests {
         use serde::Deserialize;
         use std::str::FromStr;
 
-        #[derive(Deserialize, Default)]
-        struct Temp {
-            #[serde(default)]
-            id: Vec<u64>,
-        }
-
-        let uri: Uri = "http://example.com/path/?id=0,1".parse().unwrap();
-        let result: Query<Vec<(String, String)>> = Query::try_from_uri(&uri).unwrap();
-        dbg!(&result);
+        let query = "topics=head";
+        let topics: eth2::types::EventQuery = serde_array_query::from_str(query).unwrap();
+        dbg!(&topics);
     }
 }

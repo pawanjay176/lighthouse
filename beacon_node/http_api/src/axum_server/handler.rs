@@ -1,5 +1,6 @@
 use axum::extract::{Query, RawQuery};
 use axum::http::{HeaderMap, HeaderValue};
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::{extract::Path, extract::Request, extract::State, Json};
 use beacon_chain::attestation_verification::{Error as AttnError, VerifiedAttestation};
@@ -8,15 +9,21 @@ use eth2::{
     CONSENSUS_BLOCK_VALUE_HEADER, CONSENSUS_VERSION_HEADER, CONTENT_TYPE_HEADER,
     EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER, SSZ_CONTENT_TYPE_HEADER,
 };
+use futures::Stream;
 use lighthouse_network::{NetworkGlobals, PubsubMessage};
 use lighthouse_version::version_with_platform;
 use network::{NetworkMessage, ValidatorSubscriptionMessage};
 use slog::{debug, error, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
+use std::convert::Infallible;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_stream::{
+    wrappers::{errors::BroadcastStreamRecvError, BroadcastStream},
+    StreamExt,
+};
 use types::payload::BlockProductionVersion;
 use types::{
     Attestation, AttestationData, ConfigAndPreset, Epoch, EthSpec, ForkName, ForkVersionedResponse,
@@ -191,6 +198,84 @@ pub async fn get_beacon_state_finality_checkpoints<T: BeaconChainTypes>(
         finalized: Some(finalized),
     })
     .map(Json)
+}
+
+/// Get sse events
+pub async fn get_events<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+    RawQuery(query): RawQuery, // Should probably have a cleaner solution for this
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    let topics = if let Some(query_str) = query {
+        dbg!(&query_str);
+        let event_query: api_types::EventQuery =
+            serde_array_query::from_str(&query_str).map_err(|e| {
+                HandlerError::Other(format!(
+                    "Failed to parse query string: Query string: {} error: {:?}",
+                    query_str, e
+                ))
+            })?;
+        event_query.topics
+    } else {
+        vec![]
+    };
+    // for each topic subscribed spawn a new subscription
+    let mut receivers = Vec::with_capacity(topics.len());
+    if let Some(event_handler) = chain.event_handler.as_ref() {
+        for topic in topics {
+            let receiver = match topic {
+                api_types::EventTopic::Head => event_handler.subscribe_head(),
+                api_types::EventTopic::Block => event_handler.subscribe_block(),
+                api_types::EventTopic::BlobSidecar => event_handler.subscribe_blob_sidecar(),
+                api_types::EventTopic::Attestation => event_handler.subscribe_attestation(),
+                api_types::EventTopic::VoluntaryExit => event_handler.subscribe_exit(),
+                api_types::EventTopic::FinalizedCheckpoint => event_handler.subscribe_finalized(),
+                api_types::EventTopic::ChainReorg => event_handler.subscribe_reorgs(),
+                api_types::EventTopic::ContributionAndProof => {
+                    event_handler.subscribe_contributions()
+                }
+                api_types::EventTopic::PayloadAttributes => {
+                    event_handler.subscribe_payload_attributes()
+                }
+                api_types::EventTopic::LateHead => event_handler.subscribe_late_head(),
+                api_types::EventTopic::LightClientFinalityUpdate => {
+                    event_handler.subscribe_light_client_finality_update()
+                }
+                api_types::EventTopic::LightClientOptimisticUpdate => {
+                    event_handler.subscribe_light_client_optimistic_update()
+                }
+                api_types::EventTopic::BlockReward => event_handler.subscribe_block_reward(),
+            };
+
+            receivers.push(
+                BroadcastStream::new(receiver)
+                    .map(|msg| {
+                        match msg {
+                            Ok(data) => Event::default()
+                                .event(data.topic_name())
+                                .json_data(data)
+                                .unwrap_or_else(|e| {
+                                    Event::default().comment(format!("error - bad json: {e:?}"))
+                                }),
+                            // Do not terminate the stream if the channel fills
+                            // up. Just drop some messages and send a comment to
+                            // the client.
+                            Err(BroadcastStreamRecvError::Lagged(n)) => {
+                                Event::default().comment(format!("error - dropped {n} messages"))
+                            }
+                        }
+                    })
+                    .map(Ok::<_, std::convert::Infallible>),
+            );
+        }
+    } else {
+        return Err(HandlerError::Warp(warp_utils::reject::custom_server_error(
+            "event handler was not initialized".to_string(),
+        )));
+    }
+
+    let s = futures::stream::select_all(receivers);
+    Ok(Sse::new(s).keep_alive(axum::response::sse::KeepAlive::new()))
 }
 
 /// GET beacon/states/{state_id}/validator_balances?id
