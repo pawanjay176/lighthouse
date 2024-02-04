@@ -9,26 +9,17 @@ mod error;
 mod handler;
 use super::Context;
 
+use axum_server::{tls_rustls::RustlsConfig};
 use slog::info;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use std::future::{Future, IntoFuture};
+use std::future::{Future};
 use std::net::{SocketAddr, TcpListener};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::{DefaultOnRequest, TraceLayer},
 };
-
-pub async fn serve<T: BeaconChainTypes>(
-    ctx: Arc<Context<T>>,
-    shutdown: impl Future<Output = ()> + Send + Sync + 'static,
-) -> Result<(), String> {
-    let server = start_server(ctx, shutdown)?;
-    let _ = server.await;
-
-    Ok(())
-}
 
 // Custom `on_request` function for logging
 fn on_request() -> DefaultOnRequest {
@@ -191,10 +182,10 @@ fn cors_layer(
     Ok(cors_layer)
 }
 
-pub fn start_server<T: BeaconChainTypes>(
+pub async fn start_server<T: BeaconChainTypes>(
     ctx: Arc<Context<T>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
-) -> Result<impl Future<Output = Result<(), std::io::Error>> + 'static, String> {
+) -> Result<(), String> {
     let config = ctx.config.clone();
 
     let app = routes(ctx.clone()).layer(cors_layer(
@@ -210,23 +201,41 @@ pub fn start_server<T: BeaconChainTypes>(
         .set_nonblocking(true)
         .map_err(|e| format!("Failed to set to non blocking: {:?}", e))?;
 
-    let serve = axum::serve(
-        tokio::net::TcpListener::from_std(listener)
-            .map_err(|e| format!("Failed to start tcp listener: {:?}", e))?,
-        app.into_make_service(),
-    );
     let log = ctx.log.clone();
+    match config.tls_config {
+        Some(tls_config) => {
+            let config = RustlsConfig::from_pem_file(tls_config.cert, tls_config.key)
+                .await
+                .map_err(|e| format!("Error configuring tls: {:?}", e))?;
 
-    info!(
-        log,
-        "Axum http server started";
-        "listen_address" => %addr,
-    );
-    Ok(serve
-        .with_graceful_shutdown(async {
-            shutdown.await;
-        })
-        .into_future())
+            info!(log, "Axum http server is being served over tls");
+            // TODO(pawan): shutdown on exit signal.
+            // Might have to spawn another task to listen for exit
+            // signal and then run handler.shutdown()
+            // Does not have `with_graceful_shutdown`
+            axum_server::from_tcp_rustls(listener, config)
+                .serve(app.into_make_service())
+                .await
+                .map_err(|e| format!("Error waiting on http tls server: {:?}", e))
+        }
+        None => {
+            info!(
+                log,
+                "Axum http server started";
+                "listen_address" => %addr,
+            );
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener)
+                    .map_err(|e| format!("Failed to start tcp listener: {:?}", e))?,
+                app.into_make_service(),
+            )
+            .with_graceful_shutdown(async {
+                shutdown.await;
+            })
+            .await
+            .map_err(|e| format!("Error waiting on http server: {:?}", e))
+        }
+    }
 }
 
 #[cfg(test)]

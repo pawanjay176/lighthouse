@@ -305,7 +305,7 @@ pub async fn serve_axum_server<T: BeaconChainTypes>(
     ctx: Arc<Context<T>>,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) -> Result<(), String> {
-    axum_server::serve(ctx, shutdown).await
+    axum_server::start_server(ctx, shutdown).await
 }
 
 /// Creates a server that will serve requests using information from `ctx`.
