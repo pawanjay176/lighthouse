@@ -7,6 +7,7 @@ use beacon_chain::BeaconChainTypes;
 
 mod error;
 mod handler;
+mod task_spawner;
 use super::Context;
 
 use axum_server::{tls_rustls::RustlsConfig};

@@ -1,3 +1,4 @@
+use super::task_spawner::{Priority, TaskSpawner};
 use axum::extract::{Query, RawQuery};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::sse::{Event, Sse};
@@ -64,6 +65,16 @@ fn chain_filter<T: BeaconChainTypes>(
     }
 }
 
+// TODO(pawan): probably don't need to instantiate TaskSpawner
+// repeatedly like warp
+fn task_spawner<T: BeaconChainTypes>(ctx: &Context<T>) -> TaskSpawner<T::EthSpec> {
+    TaskSpawner::new(
+        ctx.beacon_processor_send
+            .clone()
+            .filter(|_| ctx.config.enable_beacon_processor),
+    )
+}
+
 /// Returns the `Network` channel sender otherwise returns an error
 fn network_tx<T: BeaconChainTypes>(
     ctx: &Context<T>,
@@ -117,12 +128,17 @@ pub async fn get_beacon_genesis<T: BeaconChainTypes>(
     State(ctx): State<Arc<Context<T>>>,
 ) -> Result<Json<GenericResponse<GenesisData>>, HandlerError> {
     let chain = chain_filter(&ctx)?;
-    let genesis_data = GenesisData {
-        genesis_time: chain.genesis_time,
-        genesis_validators_root: chain.genesis_validators_root,
-        genesis_fork_version: chain.spec.genesis_fork_version,
-    };
-    Ok(Json(GenericResponse::from(genesis_data)))
+    let task_spawner = task_spawner(&ctx);
+    task_spawner
+        .blocking_json_task(Priority::P1, move || {
+            let genesis_data = GenesisData {
+                genesis_time: chain.genesis_time,
+                genesis_validators_root: chain.genesis_validators_root,
+                genesis_fork_version: chain.spec.genesis_fork_version,
+            };
+            Ok(GenericResponse::from(genesis_data))
+        })
+        .await
 }
 
 /// GET beacon/blocks/{block_id}/root
