@@ -502,6 +502,31 @@ where
             .map(|(peer_id, peer)| (peer_id, peer.topics.iter().collect()))
     }
 
+    pub fn dump_connected_peers(&self) -> Vec<String> {
+        let mut res = vec![];
+        for (peer_id, topics) in self.all_peers() {
+            let mut s = String::new();
+            s.push_str(&peer_id.to_string());
+            s.push_str(": ");
+            let topic_strings: Vec<_> = topics
+                .into_iter()
+                .filter(|topic| topic.as_str().contains("beacon_attestation"))
+                .map(|topic| {
+                    let topic_string = topic.as_str().to_string();
+                    let split = topic_string.split("/").collect::<Vec<_>>();
+                    split[3].to_string()
+                })
+                .collect();
+            if topic_strings.len() == 64 {
+                s.push_str("all");
+            } else {
+                s.push_str(&format!("{:?}", topic_strings));
+            }
+            res.push(s);
+        }
+        res
+    }
+
     /// Lists all known peers and their associated protocol.
     pub fn peer_protocol(&self) -> impl Iterator<Item = (&PeerId, &PeerKind)> {
         self.connected_peers.iter().map(|(k, v)| (k, &v.kind))
@@ -615,14 +640,16 @@ where
 
         let topic_hash = raw_message.topic.clone();
 
-        let mut peers_on_topic = self
+        let peers_on_topic: Vec<_> = self
             .connected_peers
             .iter()
             .filter(|(_, p)| p.topics.contains(&topic_hash))
             .map(|(peer_id, _)| peer_id)
-            .peekable();
+            .collect();
 
-        if peers_on_topic.peek().is_none() {
+        if peers_on_topic.is_empty() {
+            let dump = self.dump_connected_peers();
+            tracing::info!(all_peers=?dump, "peers_on_topic empty");
             return Err(PublishError::InsufficientPeers);
         }
 
@@ -630,7 +657,7 @@ where
 
         if self.config.flood_publish() {
             // Forward to all peers above score and all explicit peers
-            recipient_peers.extend(peers_on_topic.filter(|p| {
+            recipient_peers.extend(peers_on_topic.into_iter().filter(|p| {
                 self.explicit_peers.contains(*p)
                     || !self.score_below_threshold(p, |ts| ts.publish_threshold).0
             }));
@@ -674,8 +701,11 @@ where
             }
 
             // Explicit peers that are part of the topic
-            recipient_peers
-                .extend(peers_on_topic.filter(|peer_id| self.explicit_peers.contains(peer_id)));
+            recipient_peers.extend(
+                peers_on_topic
+                    .into_iter()
+                    .filter(|peer_id| self.explicit_peers.contains(peer_id)),
+            );
 
             // Floodsub peers
             for (peer, connections) in &self.connected_peers {
@@ -730,6 +760,8 @@ where
         }
 
         if publish_failed {
+            let dump = self.dump_connected_peers();
+            tracing::info!(all_peers=?dump, "publish failed");
             return Err(PublishError::InsufficientPeers);
         }
 
