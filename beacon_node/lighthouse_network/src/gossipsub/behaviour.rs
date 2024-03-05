@@ -640,16 +640,14 @@ where
 
         let topic_hash = raw_message.topic.clone();
 
-        let peers_on_topic: Vec<_> = self
+        let mut peers_on_topic = self
             .connected_peers
             .iter()
             .filter(|(_, p)| p.topics.contains(&topic_hash))
             .map(|(peer_id, _)| peer_id)
-            .collect();
+            .peekable();
 
-        if peers_on_topic.is_empty() {
-            let dump = self.dump_connected_peers();
-            tracing::info!(all_peers=?dump, "peers_on_topic empty");
+        if peers_on_topic.peek().is_none() {
             return Err(PublishError::InsufficientPeers);
         }
 
@@ -657,7 +655,7 @@ where
 
         if self.config.flood_publish() {
             // Forward to all peers above score and all explicit peers
-            recipient_peers.extend(peers_on_topic.into_iter().filter(|p| {
+            recipient_peers.extend(peers_on_topic.filter(|p| {
                 self.explicit_peers.contains(*p)
                     || !self.score_below_threshold(p, |ts| ts.publish_threshold).0
             }));
@@ -701,11 +699,8 @@ where
             }
 
             // Explicit peers that are part of the topic
-            recipient_peers.extend(
-                peers_on_topic
-                    .into_iter()
-                    .filter(|peer_id| self.explicit_peers.contains(peer_id)),
-            );
+            recipient_peers
+                .extend(peers_on_topic.filter(|peer_id| self.explicit_peers.contains(peer_id)));
 
             // Floodsub peers
             for (peer, connections) in &self.connected_peers {
@@ -746,7 +741,12 @@ where
                     Err(_) => {
                         self.failed_messages.entry(*peer_id).or_default().priority += 1;
 
-                        tracing::warn!(peer_id=%peer_id, "Publish queue full. Could not publish to peer");
+                        tracing::info!(
+                            peer_id=%peer_id,
+                            priority_queue_len=%peer.sender.priority_len(),
+                            non_priority_queue_len=%peer.sender.non_priority_len(),
+                            "Publish queue full. Could not publish to peer"
+                        );
                         // Downscore the peer due to failed message.
                         if let Some((peer_score, ..)) = &mut self.peer_score {
                             peer_score.failed_message_slow_peer(peer_id);
@@ -760,8 +760,7 @@ where
         }
 
         if publish_failed {
-            let dump = self.dump_connected_peers();
-            tracing::info!(all_peers=?dump, "publish failed");
+            tracing::info!(len = recipient_peers.len(), "publish failed");
             return Err(PublishError::InsufficientPeers);
         }
 
