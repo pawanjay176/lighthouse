@@ -364,7 +364,7 @@ impl<TSpec: EthSpec> Discovery<TSpec> {
         if !self.started {
             return;
         }
-        trace!(
+        debug!(
             self.log,
             "Starting discovery query for subnets";
             "subnets" => ?subnets_to_discover.iter().map(|s| s.subnet).collect::<Vec<_>>()

@@ -969,19 +969,20 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     }
                 }
                 // Already have target number of peers, no need for subnet discovery
-                let peers_on_subnet = self
+                let peers_on_subnet: Vec<_> = self
                     .network_globals
                     .peers
                     .read()
                     .good_peers_on_subnet(s.subnet)
-                    .count();
-                if peers_on_subnet >= TARGET_SUBNET_PEERS {
+                    .cloned()
+                    .collect();
+                if peers_on_subnet.len() >= TARGET_SUBNET_PEERS {
                     debug!(
                         self.log,
                         "Discovery query ignored";
                         "subnet" => ?s.subnet,
                         "reason" => "Already connected to desired peers",
-                        "connected_peers_on_subnet" => peers_on_subnet,
+                        "connected_peers_on_subnet" => ?peers_on_subnet,
                         "target_subnet_peers" => TARGET_SUBNET_PEERS,
                     );
                     false
@@ -1208,6 +1209,12 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                 }
             }
             gossipsub::Event::Subscribed { peer_id, topic } => {
+                debug!(
+                    self.log,
+                    "Peer subscribed to topic";
+                    "peer_id" => %peer_id,
+                    "topic" => %topic
+                );
                 if let Ok(topic) = GossipTopic::decode(topic.as_str()) {
                     if let Some(subnet_id) = topic.subnet_id() {
                         self.network_globals
@@ -1266,6 +1273,12 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                 }
             }
             gossipsub::Event::Unsubscribed { peer_id, topic } => {
+                debug!(
+                    self.log,
+                    "Peer unsubscribed from topic";
+                    "peer_id" => %peer_id,
+                    "topic" => %topic
+                );
                 if let Some(subnet_id) = subnet_from_topic_hash(&topic) {
                     self.network_globals
                         .peers
