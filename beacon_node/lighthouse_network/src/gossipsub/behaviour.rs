@@ -663,6 +663,7 @@ where
             match self.mesh.get(&raw_message.topic) {
                 // Mesh peers
                 Some(mesh_peers) => {
+                    tracing::info!(len = mesh_peers.len(), "publish: adding mesh peers");
                     recipient_peers.extend(mesh_peers);
                 }
                 // Gossipsub peers
@@ -670,7 +671,9 @@ where
                     tracing::debug!(topic=%topic_hash, "Topic not in the mesh");
                     // If we have fanout peers add them to the map.
                     if self.fanout.contains_key(&topic_hash) {
-                        for peer in self.fanout.get(&topic_hash).expect("Topic must exist") {
+                        let fanouts = self.fanout.get(&topic_hash).expect("Topic must exist");
+                        tracing::info!(len = fanouts.len(), "publish: adding fanout peers");
+                        for peer in fanouts {
                             recipient_peers.insert(*peer);
                         }
                     } else {
@@ -687,6 +690,7 @@ where
                             });
                         // Add the new peers to the fanout and recipient peers
                         self.fanout.insert(topic_hash.clone(), new_peers.clone());
+                        tracing::info!(len = new_peers.len(), "publish: adding new random peers");
                         for peer in new_peers {
                             tracing::debug!(%peer, "Peer added to fanout");
                             recipient_peers.insert(peer);
