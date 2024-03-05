@@ -853,6 +853,11 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                 self.libp2p.update_enr_subnet(subnet, false);
             }
             SubnetServiceMessage::DiscoverPeers(subnets_to_discover) => {
+                debug!(
+                    self.log,
+                    "Received subnet discovery request";
+                    "subnets_to_discover" => ?subnets_to_discover,
+                );
                 self.libp2p.discover_subnet_peers(subnets_to_discover);
             }
         }

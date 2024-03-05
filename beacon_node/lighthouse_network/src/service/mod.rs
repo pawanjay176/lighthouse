@@ -976,7 +976,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                     .good_peers_on_subnet(s.subnet)
                     .count();
                 if peers_on_subnet >= TARGET_SUBNET_PEERS {
-                    trace!(
+                    debug!(
                         self.log,
                         "Discovery query ignored";
                         "subnet" => ?s.subnet,
@@ -1226,7 +1226,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                                 .publish(Topic::from(topic.clone()), data)
                             {
                                 Ok(_) => {
-                                    debug!(
+                                    trace!(
                                         self.log,
                                         "Gossip message published on retry";
                                         "topic" => topic_str
@@ -1237,7 +1237,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                                     );
                                 }
                                 Err(PublishError::Duplicate) => {
-                                    debug!(
+                                    trace!(
                                         self.log,
                                         "Gossip message publish ignored on retry";
                                         "reason" => "duplicate",
@@ -1249,7 +1249,7 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                                     );
                                 }
                                 Err(e) => {
-                                    warn!(
+                                    trace!(
                                         self.log,
                                         "Gossip message publish failed on retry";
                                         "topic" => topic_str,

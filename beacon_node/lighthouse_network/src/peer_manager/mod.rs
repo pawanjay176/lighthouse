@@ -348,6 +348,15 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
                     to_dial_peers += 1;
                 }
             }
+            else {
+                debug!(
+                    self.log,
+                    "Did not dial discovered peer";
+                    "connected_or_dialing" => connected_or_dialing,
+                    "to_dial_peers" => to_dial_peers,
+                    "connected_peers" => self.network_globals.connected_peers()
+                );
+            }
         }
 
         // Queue another discovery if we need to
