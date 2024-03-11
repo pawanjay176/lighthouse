@@ -90,6 +90,7 @@ pub enum BlockProcessingError {
     },
     WithdrawalCredentialsInvalid,
     ParticipationCacheError(ParticipationCacheError),
+    InclusionListSignatureInvalid,
 }
 
 impl From<BeaconStateError> for BlockProcessingError {

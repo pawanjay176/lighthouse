@@ -1974,6 +1974,7 @@ impl<T: EthSpec> ExecutionLayer<T> {
                     withdrawals,
                     blob_gas_used: electra_block.blob_gas_used,
                     excess_blob_gas: electra_block.excess_blob_gas,
+                    previous_inclusion_list_summary: electra_block.previous_inclusion_list_summary,
                 })
             }
         };

@@ -878,6 +878,7 @@ impl<T: SlotClock + 'static, E: EthSpec> BlockService<T, E> {
     }
 }
 
+#[allow(clippy::large_enum_variant)] // TODO(eip7547): The straw that broke the camel's back?
 pub enum UnsignedBlock<E: EthSpec> {
     Full(FullBlockContents<E>),
     Blinded(BlindedBeaconBlock<E>),

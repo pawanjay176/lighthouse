@@ -59,6 +59,8 @@ pub fn upgrade_to_electra<E: EthSpec>(
         next_withdrawal_index: pre.next_withdrawal_index,
         next_withdrawal_validator_index: pre.next_withdrawal_validator_index,
         historical_summaries: pre.historical_summaries.clone(),
+        // Electra
+        previous_proposer_index: 0, // TODO(eip7547): actually not specified yet
         // Caches
         total_active_balance: pre.total_active_balance,
         progressive_balances_cache: mem::take(&mut pre.progressive_balances_cache),

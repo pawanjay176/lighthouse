@@ -322,6 +322,11 @@ where
     #[superstruct(only(Capella, Deneb, Electra))]
     pub historical_summaries: VariableList<HistoricalSummary, T::HistoricalRootsLimit>,
 
+    // Electra
+    #[superstruct(only(Electra))]
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub previous_proposer_index: u64,
+
     // Caching (not in the spec)
     #[serde(skip_serializing, skip_deserializing)]
     #[ssz(skip_serializing, skip_deserializing)]

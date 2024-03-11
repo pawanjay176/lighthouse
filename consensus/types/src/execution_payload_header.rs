@@ -88,6 +88,8 @@ pub struct ExecutionPayloadHeader<T: EthSpec> {
     #[serde(with = "serde_utils::quoted_u64")]
     #[superstruct(getter(copy))]
     pub excess_blob_gas: u64,
+    #[superstruct(only(Electra))]
+    pub previous_inclusion_list_summary_root: Hash256,
 }
 
 impl<T: EthSpec> ExecutionPayloadHeader<T> {
@@ -187,6 +189,7 @@ impl<T: EthSpec> ExecutionPayloadHeaderDeneb<T> {
             withdrawals_root: self.withdrawals_root,
             blob_gas_used: self.blob_gas_used,
             excess_blob_gas: self.excess_blob_gas,
+            previous_inclusion_list_summary_root: Hash256::zero(), // TODO(eip7547): actually not specified yet
         }
     }
 }
@@ -278,6 +281,9 @@ impl<'a, T: EthSpec> From<&'a ExecutionPayloadElectra<T>> for ExecutionPayloadHe
             withdrawals_root: payload.withdrawals.tree_hash_root(),
             blob_gas_used: payload.blob_gas_used,
             excess_blob_gas: payload.excess_blob_gas,
+            previous_inclusion_list_summary_root: payload
+                .previous_inclusion_list_summary
+                .tree_hash_root(),
         }
     }
 }

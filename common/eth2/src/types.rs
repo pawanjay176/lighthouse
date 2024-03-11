@@ -1523,6 +1523,7 @@ mod tests {
 #[serde(untagged)]
 #[serde(bound = "E: EthSpec")]
 #[ssz(enum_behaviour = "transparent")]
+#[allow(clippy::large_enum_variant)] // TODO(eip7547): The straw that broke the camel's back?
 pub enum ProduceBlockV3Response<E: EthSpec> {
     Full(FullBlockContents<E>),
     Blinded(BlindedBeaconBlock<E>),

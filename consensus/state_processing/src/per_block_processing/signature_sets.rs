@@ -11,8 +11,8 @@ use types::{
     BeaconStateError, ChainSpec, DepositData, Domain, Epoch, EthSpec, Fork, Hash256,
     InconsistentFork, IndexedAttestation, ProposerSlashing, PublicKey, PublicKeyBytes, Signature,
     SignedAggregateAndProof, SignedBeaconBlock, SignedBeaconBlockHeader,
-    SignedBlsToExecutionChange, SignedContributionAndProof, SignedRoot, SignedVoluntaryExit,
-    SigningData, Slot, SyncAggregate, SyncAggregatorSelectionData, Unsigned,
+    SignedBlsToExecutionChange, SignedContributionAndProof, SignedInclusionListSummary, SignedRoot,
+    SignedVoluntaryExit, SigningData, Slot, SyncAggregate, SyncAggregatorSelectionData, Unsigned,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -664,4 +664,36 @@ where
         participant_pubkeys,
         message,
     )))
+}
+
+pub fn inclusion_list_summary_signature_set<'a, F, E: EthSpec>(
+    state: &'a BeaconState<E>,
+    get_pubkey: F,
+    signed_inclusion_list_summary: &'a SignedInclusionListSummary<E>,
+    spec: &'a ChainSpec,
+) -> Result<SignatureSet<'a>>
+where
+    F: Fn(usize) -> Option<Cow<'a, PublicKey>>,
+{
+    let domain = spec.get_domain(
+        state.current_epoch(),
+        Domain::InclusionListSummary,
+        &state.fork(),
+        state.genesis_validators_root(),
+    );
+
+    let message = SigningData {
+        object_root: signed_inclusion_list_summary.summary.tree_hash_root(),
+        domain,
+    }
+    .tree_hash_root();
+
+    let prev_proposer_index = *state.previous_proposer_index()?;
+
+    Ok(SignatureSet::single_pubkey(
+        &signed_inclusion_list_summary.signature,
+        get_pubkey(prev_proposer_index as usize)
+            .ok_or(Error::ValidatorUnknown(prev_proposer_index))?,
+        message,
+    ))
 }

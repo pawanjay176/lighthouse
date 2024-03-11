@@ -26,6 +26,7 @@ pub enum Domain {
     ContributionAndProof,
     SyncCommitteeSelectionProof,
     ApplicationMask(ApplicationDomain),
+    InclusionListSummary,
 }
 
 /// Lighthouse's internal configuration struct.
@@ -225,6 +226,11 @@ pub struct ChainSpec {
      * Capella params
      */
     pub(crate) domain_bls_to_execution_change: u32,
+
+    /*
+     * Electra params
+     */
+    pub(crate) domain_inclusion_list_summary: u32,
 }
 
 impl ChainSpec {
@@ -418,6 +424,7 @@ impl ChainSpec {
             Domain::SyncCommitteeSelectionProof => self.domain_sync_committee_selection_proof,
             Domain::ApplicationMask(application_domain) => application_domain.get_domain_constant(),
             Domain::BlsToExecutionChange => self.domain_bls_to_execution_change,
+            Domain::InclusionListSummary => self.domain_inclusion_list_summary,
         }
     }
 
@@ -752,6 +759,11 @@ impl ChainSpec {
              * Capella params
              */
             domain_bls_to_execution_change: 10,
+
+            /*
+             * Electra params
+             */
+            domain_inclusion_list_summary: 11,
         }
     }
 
@@ -1024,6 +1036,11 @@ impl ChainSpec {
              * Capella params
              */
             domain_bls_to_execution_change: 10,
+
+            /*
+             * Electra params
+             */
+            domain_inclusion_list_summary: 11,
         }
     }
 }

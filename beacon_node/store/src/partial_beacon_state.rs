@@ -116,6 +116,10 @@ where
     #[superstruct(only(Capella, Deneb, Electra))]
     pub next_withdrawal_validator_index: u64,
 
+    // Electra
+    #[superstruct(only(Electra))]
+    pub previous_proposer_index: u64,
+
     #[ssz(skip_serializing, skip_deserializing)]
     #[superstruct(only(Capella, Deneb, Electra))]
     pub historical_summaries: Option<VariableList<HistoricalSummary, T::HistoricalRootsLimit>>,
@@ -262,7 +266,8 @@ impl<T: EthSpec> PartialBeaconState<T> {
                     inactivity_scores,
                     latest_execution_payload_header,
                     next_withdrawal_index,
-                    next_withdrawal_validator_index
+                    next_withdrawal_validator_index,
+                    previous_proposer_index
                 ],
                 [historical_summaries]
             ),
@@ -523,7 +528,8 @@ impl<E: EthSpec> TryInto<BeaconState<E>> for PartialBeaconState<E> {
                     inactivity_scores,
                     latest_execution_payload_header,
                     next_withdrawal_index,
-                    next_withdrawal_validator_index
+                    next_withdrawal_validator_index,
+                    previous_proposer_index
                 ],
                 [historical_summaries]
             ),

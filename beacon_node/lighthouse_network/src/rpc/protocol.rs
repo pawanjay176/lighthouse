@@ -97,9 +97,7 @@ lazy_static! {
                                     //
     pub static ref SIGNED_BEACON_BLOCK_ELECTRA_MAX: usize = *SIGNED_BEACON_BLOCK_ELECTRA_MAX_WITHOUT_PAYLOAD
     + types::ExecutionPayload::<MainnetEthSpec>::max_execution_payload_electra_size() // adding max size of execution payload (~16gb)
-    + ssz::BYTES_PER_LENGTH_OFFSET // Adding the additional ssz offset for the `ExecutionPayload` field
-    + (<types::KzgCommitment as Encode>::ssz_fixed_len() * <MainnetEthSpec>::max_blobs_per_block())
-    + ssz::BYTES_PER_LENGTH_OFFSET; // Length offset for the blob commitments field.
+    + ssz::BYTES_PER_LENGTH_OFFSET; // Adding the additional ssz offset for the `ExecutionPayload` field
 
     pub static ref ERROR_TYPE_MIN: usize =
         VariableList::<u8, MaxErrorLen>::from(Vec::<u8>::new())

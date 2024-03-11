@@ -570,6 +570,10 @@ pub async fn handle_rpc<T: EthSpec>(
                                 .withdrawals()
                                 .ok()
                                 .map(|withdrawals| VariableList::from(withdrawals.clone())),
+                            previous_inclusion_list_summary: block
+                                .previous_inclusion_list_summary()
+                                .ok()
+                                .cloned(),
                         }));
                     }
                     None => response.push(None),

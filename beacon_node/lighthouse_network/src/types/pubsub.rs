@@ -8,13 +8,14 @@ use ssz::{Decode, Encode};
 use std::boxed::Box;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
+use types::signed_beacon_block_and_inclusion_list::SignedBeaconBlockAndInclusionListElectra;
 use types::{
     Attestation, AttesterSlashing, BlobSidecar, EthSpec, ForkContext, ForkName,
     LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
-    SignedAggregateAndProof, SignedBeaconBlock, SignedBeaconBlockAltair, SignedBeaconBlockBase,
-    SignedBeaconBlockCapella, SignedBeaconBlockDeneb, SignedBeaconBlockElectra,
-    SignedBeaconBlockMerge, SignedBlsToExecutionChange, SignedContributionAndProof,
-    SignedVoluntaryExit, SubnetId, SyncCommitteeMessage, SyncSubnetId,
+    SignedAggregateAndProof, SignedBeaconBlock, SignedBeaconBlockAltair,
+    SignedBeaconBlockAndInclusionList, SignedBeaconBlockBase, SignedBeaconBlockCapella,
+    SignedBeaconBlockDeneb, SignedBeaconBlockMerge, SignedBlsToExecutionChange,
+    SignedContributionAndProof, SignedVoluntaryExit, SubnetId, SyncCommitteeMessage, SyncSubnetId,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,9 +194,13 @@ impl<T: EthSpec> PubsubMessage<T> {
                                     SignedBeaconBlockDeneb::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
                                 ),
-                                Some(ForkName::Electra) => SignedBeaconBlock::<T>::Electra(
-                                    SignedBeaconBlockElectra::from_ssz_bytes(data)
-                                        .map_err(|e| format!("{:?}", e))?,
+                                Some(ForkName::Electra) => todo!("eip7547: this obviously doesnt typecheck: {:?}
+                                    Option 1: introduce PubsubMessage::BeaconBlockV2
+                                    Option 2: change PubsubMessage::BeaconBlock to (Arc<SignedBeaconBlock<T>>, Option<Arc<SignedInclusionList<T>>>) or something...",
+                                    SignedBeaconBlockAndInclusionList::<T>::Electra(
+                                        SignedBeaconBlockAndInclusionListElectra::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    )
                                 ),
                                 None => {
                                     return Err(format!(

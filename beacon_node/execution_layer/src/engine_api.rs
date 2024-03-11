@@ -28,7 +28,7 @@ pub use types::{
 
 use types::{
     ExecutionPayloadCapella, ExecutionPayloadDeneb, ExecutionPayloadElectra, ExecutionPayloadMerge,
-    KzgProofs,
+    KzgProofs, SignedInclusionListSummary,
 };
 
 pub mod auth;
@@ -198,6 +198,8 @@ pub struct ExecutionBlockWithTransactions<T: EthSpec> {
     #[superstruct(only(Deneb, Electra))]
     #[serde(with = "serde_utils::u64_hex_be")]
     pub excess_blob_gas: u64,
+    #[superstruct(only(Electra))]
+    pub previous_inclusion_list_summary: SignedInclusionListSummary<T>,
 }
 
 impl<T: EthSpec> TryFrom<ExecutionPayload<T>> for ExecutionBlockWithTransactions<T> {
@@ -303,6 +305,7 @@ impl<T: EthSpec> TryFrom<ExecutionPayload<T>> for ExecutionBlockWithTransactions
                         .collect(),
                     blob_gas_used: block.blob_gas_used,
                     excess_blob_gas: block.excess_blob_gas,
+                    previous_inclusion_list_summary: block.previous_inclusion_list_summary,
                 })
             }
         };
@@ -522,6 +525,7 @@ impl<T: EthSpec> GetPayloadResponse<T> {
 pub struct ExecutionPayloadBodyV1<E: EthSpec> {
     pub transactions: Transactions<E>,
     pub withdrawals: Option<Withdrawals<E>>,
+    pub previous_inclusion_list_summary: Option<SignedInclusionListSummary<E>>,
 }
 
 impl<E: EthSpec> ExecutionPayloadBodyV1<E> {
@@ -610,25 +614,35 @@ impl<E: EthSpec> ExecutionPayloadBodyV1<E> {
             }
             ExecutionPayloadHeader::Electra(header) => {
                 if let Some(withdrawals) = self.withdrawals {
-                    Ok(ExecutionPayload::Electra(ExecutionPayloadElectra {
-                        parent_hash: header.parent_hash,
-                        fee_recipient: header.fee_recipient,
-                        state_root: header.state_root,
-                        receipts_root: header.receipts_root,
-                        logs_bloom: header.logs_bloom,
-                        prev_randao: header.prev_randao,
-                        block_number: header.block_number,
-                        gas_limit: header.gas_limit,
-                        gas_used: header.gas_used,
-                        timestamp: header.timestamp,
-                        extra_data: header.extra_data,
-                        base_fee_per_gas: header.base_fee_per_gas,
-                        block_hash: header.block_hash,
-                        transactions: self.transactions,
-                        withdrawals,
-                        blob_gas_used: header.blob_gas_used,
-                        excess_blob_gas: header.excess_blob_gas,
-                    }))
+                    if let Some(previous_inclusion_list_summary) =
+                        self.previous_inclusion_list_summary
+                    {
+                        Ok(ExecutionPayload::Electra(ExecutionPayloadElectra {
+                            parent_hash: header.parent_hash,
+                            fee_recipient: header.fee_recipient,
+                            state_root: header.state_root,
+                            receipts_root: header.receipts_root,
+                            logs_bloom: header.logs_bloom,
+                            prev_randao: header.prev_randao,
+                            block_number: header.block_number,
+                            gas_limit: header.gas_limit,
+                            gas_used: header.gas_used,
+                            timestamp: header.timestamp,
+                            extra_data: header.extra_data,
+                            base_fee_per_gas: header.base_fee_per_gas,
+                            block_hash: header.block_hash,
+                            transactions: self.transactions,
+                            withdrawals,
+                            blob_gas_used: header.blob_gas_used,
+                            excess_blob_gas: header.excess_blob_gas,
+                            previous_inclusion_list_summary,
+                        }))
+                    } else {
+                        Err(format!(
+                            "block {} is post-electra but payload body doesn't have previous_inclusion_list_summary",
+                            header.block_hash
+                        ))
+                    }
                 } else {
                     Err(format!(
                         "block {} is post-capella but payload body doesn't have withdrawals",

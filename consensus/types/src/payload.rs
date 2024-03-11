@@ -40,6 +40,9 @@ pub trait ExecPayload<T: EthSpec>: Debug + Clone + PartialEq + Hash + TreeHash +
     /// fork-specific fields
     fn withdrawals_root(&self) -> Result<Hash256, Error>;
     fn blob_gas_used(&self) -> Result<u64, Error>;
+    fn previous_inclusion_list_summary(
+        &self,
+    ) -> Result<Option<&SignedInclusionListSummary<T>>, Error>;
 
     /// Is this a default payload with 0x0 roots for transactions and withdrawals?
     fn is_default_with_zero_roots(&self) -> bool;
@@ -274,6 +277,19 @@ impl<T: EthSpec> ExecPayload<T> for FullPayload<T> {
         }
     }
 
+    fn previous_inclusion_list_summary(
+        &self,
+    ) -> Result<Option<&SignedInclusionListSummary<T>>, BeaconStateError> {
+        match self {
+            FullPayload::Merge(_) | FullPayload::Capella(_) | FullPayload::Deneb(_) => {
+                Err(Error::IncorrectStateVariant)
+            }
+            FullPayload::Electra(ref inner) => Ok(Some(
+                &inner.execution_payload.previous_inclusion_list_summary,
+            )),
+        }
+    }
+
     fn is_default_with_zero_roots<'a>(&'a self) -> bool {
         map_full_payload_ref!(&'a _, self.to_ref(), move |payload, cons| {
             cons(payload);
@@ -403,6 +419,19 @@ impl<'b, T: EthSpec> ExecPayload<T> for FullPayloadRef<'b, T> {
             }
             FullPayloadRef::Deneb(inner) => Ok(inner.execution_payload.blob_gas_used),
             FullPayloadRef::Electra(inner) => Ok(inner.execution_payload.blob_gas_used),
+        }
+    }
+
+    fn previous_inclusion_list_summary(
+        &self,
+    ) -> Result<Option<&SignedInclusionListSummary<T>>, BeaconStateError> {
+        match self {
+            FullPayloadRef::Merge(_) | FullPayloadRef::Capella(_) | FullPayloadRef::Deneb(_) => {
+                Err(Error::IncorrectStateVariant)
+            }
+            FullPayloadRef::Electra(inner) => Ok(Some(
+                &inner.execution_payload.previous_inclusion_list_summary,
+            )),
         }
     }
 
@@ -583,6 +612,17 @@ impl<T: EthSpec> ExecPayload<T> for BlindedPayload<T> {
         }
     }
 
+    fn previous_inclusion_list_summary(
+        &self,
+    ) -> Result<Option<&SignedInclusionListSummary<T>>, BeaconStateError> {
+        match self {
+            BlindedPayload::Merge(_) | BlindedPayload::Capella(_) | BlindedPayload::Deneb(_) => {
+                Err(Error::IncorrectStateVariant)
+            }
+            BlindedPayload::Electra(_) => Ok(None),
+        }
+    }
+
     fn is_default_with_zero_roots(&self) -> bool {
         self.to_ref().is_default_with_zero_roots()
     }
@@ -684,6 +724,17 @@ impl<'b, T: EthSpec> ExecPayload<T> for BlindedPayloadRef<'b, T> {
         }
     }
 
+    fn previous_inclusion_list_summary(
+        &self,
+    ) -> Result<Option<&SignedInclusionListSummary<T>>, BeaconStateError> {
+        match self {
+            BlindedPayloadRef::Merge(_)
+            | BlindedPayloadRef::Capella(_)
+            | BlindedPayloadRef::Deneb(_) => Err(Error::IncorrectStateVariant),
+            BlindedPayloadRef::Electra(_) => Ok(None),
+        }
+    }
+
     fn is_default_with_zero_roots<'a>(&'a self) -> bool {
         map_blinded_payload_ref!(&'b _, self, move |payload, cons| {
             cons(payload);
@@ -710,7 +761,8 @@ macro_rules! impl_exec_payload_common {
      $is_default_with_empty_roots:block,
      $f:block,
      $g:block,
-     $h:block) => {
+     $h:block,
+     $i:block) => {
         impl<T: EthSpec> ExecPayload<T> for $wrapper_type<T> {
             fn block_type() -> BlockType {
                 BlockType::$block_type_variant
@@ -773,6 +825,13 @@ macro_rules! impl_exec_payload_common {
                 let h = $h;
                 h(self)
             }
+
+            fn previous_inclusion_list_summary(
+                &self,
+            ) -> Result<Option<&SignedInclusionListSummary<T>>, Error> {
+                let i = $i;
+                i(self)
+            }
         }
 
         impl<T: EthSpec> From<$wrapped_type<T>> for $wrapper_type<T> {
@@ -818,7 +877,8 @@ macro_rules! impl_exec_payload_for_fork {
                         wrapper_ref_type.blob_gas_used()
                     };
                 c
-            }
+            },
+            { |_| { Ok(None) } }
         );
 
         impl<T: EthSpec> TryInto<$wrapper_type_header<T>> for BlindedPayload<T> {
@@ -904,6 +964,14 @@ macro_rules! impl_exec_payload_for_fork {
                         let wrapper_ref_type = FullPayloadRef::$fork_variant(&payload);
                         wrapper_ref_type.blob_gas_used()
                     };
+                c
+            },
+            {
+                let c: for<'a> fn(
+                    &'a $wrapper_type_full<T>,
+                )
+                    -> Result<Option<&'a SignedInclusionListSummary<T>>, Error> =
+                    |payload: &$wrapper_type_full<T>| payload.previous_inclusion_list_summary();
                 c
             }
         );

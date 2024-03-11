@@ -105,6 +105,8 @@ pub struct JsonExecutionPayload<T: EthSpec> {
     #[superstruct(only(V3, V4))]
     #[serde(with = "serde_utils::u64_hex_be")]
     pub excess_blob_gas: u64,
+    #[superstruct(only(V4))]
+    pub previous_inclusion_list_summary: SignedInclusionListSummary<T>,
 }
 
 impl<T: EthSpec> From<ExecutionPayloadMerge<T>> for JsonExecutionPayloadV1<T> {
@@ -207,6 +209,7 @@ impl<T: EthSpec> From<ExecutionPayloadElectra<T>> for JsonExecutionPayloadV4<T> 
                 .into(),
             blob_gas_used: payload.blob_gas_used,
             excess_blob_gas: payload.excess_blob_gas,
+            previous_inclusion_list_summary: payload.previous_inclusion_list_summary,
         }
     }
 }
@@ -323,6 +326,7 @@ impl<T: EthSpec> From<JsonExecutionPayloadV4<T>> for ExecutionPayloadElectra<T> 
                 .into(),
             blob_gas_used: payload.blob_gas_used,
             excess_blob_gas: payload.excess_blob_gas,
+            previous_inclusion_list_summary: payload.previous_inclusion_list_summary,
         }
     }
 }
@@ -695,6 +699,7 @@ pub struct JsonExecutionPayloadBodyV1<E: EthSpec> {
     #[serde(with = "ssz_types::serde_utils::list_of_hex_var_list")]
     pub transactions: Transactions<E>,
     pub withdrawals: Option<VariableList<JsonWithdrawal, E::MaxWithdrawalsPerPayload>>,
+    pub previous_inclusion_list_summary: Option<SignedInclusionListSummary<E>>,
 }
 
 impl<E: EthSpec> From<JsonExecutionPayloadBodyV1<E>> for ExecutionPayloadBodyV1<E> {
@@ -709,6 +714,7 @@ impl<E: EthSpec> From<JsonExecutionPayloadBodyV1<E>> for ExecutionPayloadBodyV1<
                         .collect::<Vec<_>>(),
                 )
             }),
+            previous_inclusion_list_summary: value.previous_inclusion_list_summary,
         }
     }
 }

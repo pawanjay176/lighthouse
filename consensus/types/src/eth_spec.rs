@@ -1,5 +1,6 @@
 use crate::*;
 
+use crate::typenum::{U143, U2097152};
 use safe_arith::SafeArith;
 use serde::{Deserialize, Serialize};
 use ssz_types::typenum::{
@@ -112,6 +113,11 @@ pub trait EthSpec:
     type BytesPerFieldElement: Unsigned + Clone + Sync + Send + Debug + PartialEq;
     type KzgCommitmentInclusionProofDepth: Unsigned + Clone + Sync + Send + Debug + PartialEq;
     /*
+     * New in Electra
+     */
+    type MaxTransactionsPerInclusionList: Unsigned + Clone + Sync + Send + Debug + PartialEq;
+    type MaxGasPerInclusionList: Unsigned + Clone + Sync + Send + Debug + PartialEq;
+    /*
      * Derived values (set these CAREFULLY)
      */
     /// The length of the `{previous,current}_epoch_attestations` lists.
@@ -133,11 +139,6 @@ pub trait EthSpec:
     ///
     /// Must be set to `BytesPerFieldElement * FieldElementsPerBlob`.
     type BytesPerBlob: Unsigned + Clone + Sync + Send + Debug + PartialEq;
-
-    /*
-     * New in Electra
-     */
-    type ElectraPlaceholder: Unsigned + Clone + Sync + Send + Debug + PartialEq;
 
     fn default_spec() -> ChainSpec;
 
@@ -284,8 +285,14 @@ pub trait EthSpec:
         Self::KzgCommitmentInclusionProofDepth::to_usize()
     }
 
-    fn electra_placeholder() -> usize {
-        Self::ElectraPlaceholder::to_usize()
+    /// Returns the `MAX_TRANSACTIONS_PER_INCLUSION_LIST` preset for this specification.
+    fn max_transactions_per_inclusion_list() -> usize {
+        Self::MaxTransactionsPerInclusionList::to_usize()
+    }
+
+    /// Returns the `MAX_GAS_PER_INCLUSION_LIST` preset for this specification.
+    fn max_gas_per_inclusion_list() -> usize {
+        Self::MaxGasPerInclusionList::to_usize()
     }
 }
 
@@ -337,7 +344,8 @@ impl EthSpec for MainnetEthSpec {
     type SlotsPerEth1VotingPeriod = U2048; // 64 epochs * 32 slots per epoch
     type MaxBlsToExecutionChanges = U16;
     type MaxWithdrawalsPerPayload = U16;
-    type ElectraPlaceholder = U16;
+    type MaxTransactionsPerInclusionList = U143;
+    type MaxGasPerInclusionList = U2097152; // 2,097,152
 
     fn default_spec() -> ChainSpec {
         ChainSpec::mainnet()
@@ -390,7 +398,8 @@ impl EthSpec for MinimalEthSpec {
         MaxBlsToExecutionChanges,
         MaxBlobsPerBlock,
         BytesPerFieldElement,
-        ElectraPlaceholder
+        MaxTransactionsPerInclusionList,
+        MaxGasPerInclusionList
     });
 
     fn default_spec() -> ChainSpec {
@@ -442,7 +451,8 @@ impl EthSpec for GnosisEthSpec {
     type BytesPerFieldElement = U32;
     type BytesPerBlob = U131072;
     type KzgCommitmentInclusionProofDepth = U17;
-    type ElectraPlaceholder = U16;
+    type MaxTransactionsPerInclusionList = U16;
+    type MaxGasPerInclusionList = U2097152; // 2,097,152
 
     fn default_spec() -> ChainSpec {
         ChainSpec::gnosis()

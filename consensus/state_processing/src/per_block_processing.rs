@@ -45,6 +45,7 @@ use crate::StateProcessingStrategy;
 use crate::common::update_progressive_balances_cache::{
     initialize_progressive_balances_cache, update_progressive_balances_metrics,
 };
+use crate::signature_sets::inclusion_list_summary_signature_set;
 #[cfg(feature = "arbitrary-fuzz")]
 use arbitrary::Arbitrary;
 
@@ -123,6 +124,7 @@ pub fn per_block_processing<T: EthSpec, Payload: AbstractExecPayload<T>>(
     let verify_signatures = match block_signature_strategy {
         BlockSignatureStrategy::VerifyBulk => {
             // Verify all signatures in the block at once.
+            // TODO(eip7547): Include signature of inclusion list summary
             block_verify!(
                 BlockSignatureVerifier::verify_entire_block(
                     state,
@@ -239,6 +241,8 @@ pub fn process_block_header<T: EthSpec>(
             }
         );
     }
+
+    *state.previous_proposer_index_mut()? = state.latest_block_header().proposer_index;
 
     *state.latest_block_header_mut() = block_header;
 
@@ -386,6 +390,13 @@ pub fn partially_verify_execution_payload<T: EthSpec, Payload: AbstractExecPaylo
         }
     );
 
+    // we can only verify the signature if the block is not blinded
+    // TODO(eip7547): is it fine to do nothing if the block is blinded but the signatures should be verified?
+    if let Some(previous_inclusion_list_summary) = payload.previous_inclusion_list_summary()? {
+        // TODO(eip7547): Do not verify if we already verifed all signatures (adhere to BlockSignatureStrategy)
+        verify_inclusion_list_summary_signature(state, previous_inclusion_list_summary, spec)?;
+    }
+
     if let Ok(blob_commitments) = body.blob_kzg_commitments() {
         // Verify commitments are under the limit.
         block_verify!(
@@ -396,6 +407,25 @@ pub fn partially_verify_execution_payload<T: EthSpec, Payload: AbstractExecPaylo
             }
         );
     }
+
+    Ok(())
+}
+
+pub fn verify_inclusion_list_summary_signature<E: EthSpec>(
+    state: &BeaconState<E>,
+    inclusion_list_summary: &SignedInclusionListSummary<E>,
+    spec: &ChainSpec,
+) -> Result<(), BlockProcessingError> {
+    block_verify!(
+        inclusion_list_summary_signature_set(
+            state,
+            |i| get_pubkey_from_state(state, i),
+            inclusion_list_summary,
+            spec,
+        )?
+        .verify(),
+        BlockProcessingError::InclusionListSignatureInvalid
+    );
 
     Ok(())
 }
