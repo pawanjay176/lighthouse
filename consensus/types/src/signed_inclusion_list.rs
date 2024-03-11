@@ -8,6 +8,11 @@ use ssz_types::VariableList;
 use test_random_derive::TestRandom;
 use tree_hash_derive::TreeHash;
 
+pub type InclusionList<E> = VariableList<
+    Transaction<<E as EthSpec>::MaxBytesPerTransaction>,
+    <E as EthSpec>::MaxTransactionsPerInclusionList,
+>;
+
 #[derive(
     arbitrary::Arbitrary,
     Debug,
@@ -26,7 +31,6 @@ use tree_hash_derive::TreeHash;
 #[arbitrary(bound = "E: EthSpec")]
 pub struct SignedInclusionList<E: EthSpec> {
     pub signed_summary: SignedInclusionListSummary<E>,
-    pub transactions:
-        VariableList<Transaction<E::MaxBytesPerTransaction>, E::MaxTransactionsPerInclusionList>,
+    pub transactions: InclusionList<E>,
     pub signature: Signature,
 }

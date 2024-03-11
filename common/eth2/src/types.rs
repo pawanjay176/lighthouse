@@ -1508,14 +1508,17 @@ mod tests {
         let blobs = BlobsList::<E>::from(vec![Blob::<E>::default()]);
         let kzg_proofs = KzgProofs::<E>::from(vec![KzgProof::empty()]);
         let signed_block_contents =
-            PublishBlockRequest::new(Arc::new(block), Some((kzg_proofs, blobs)));
+            PublishBlockRequest::new(Arc::new(block), Some((kzg_proofs, blobs)), None);
 
         let decoded: PublishBlockRequest<E> = PublishBlockRequest::from_ssz_bytes(
             &signed_block_contents.as_ssz_bytes(),
             ForkName::Deneb,
         )
         .expect("should decode BlockAndBlobSidecars");
-        assert!(matches!(decoded, PublishBlockRequest::BlockContents(_)));
+        assert!(matches!(
+            decoded,
+            PublishBlockRequest::BlockContentsDeneb(_)
+        ));
     }
 }
 
@@ -1650,7 +1653,7 @@ impl<T: EthSpec> FullBlockContents<T> {
     ) -> PublishBlockRequest<T> {
         let (block, maybe_blobs) = self.deconstruct();
         let signed_block = block.sign(secret_key, fork, genesis_validators_root, spec);
-        PublishBlockRequest::new(Arc::new(signed_block), maybe_blobs)
+        PublishBlockRequest::new(Arc::new(signed_block), maybe_blobs, None) // TODO(eip7547)
     }
 }
 
@@ -1684,6 +1687,7 @@ impl<T: EthSpec> Into<BeaconBlock<T>> for FullBlockContents<T> {
 pub type SignedBlockContentsTuple<T> = (
     Arc<SignedBeaconBlock<T>>,
     Option<(KzgProofs<T>, BlobsList<T>)>,
+    Option<Arc<SignedInclusionList<T>>>,
 );
 
 fn parse_required_header<T>(
@@ -1732,13 +1736,15 @@ impl TryFrom<&HeaderMap> for ProduceBlockV3Metadata {
     }
 }
 
-/// A wrapper over a [`SignedBeaconBlock`] or a [`SignedBlockContents`].
+/// A wrapper over a [`SignedBeaconBlock`] or a [`SignedBlockContentsDeneb`].
 #[derive(Clone, Debug, Encode, Serialize, Deserialize)]
 #[serde(untagged)]
 #[serde(bound = "T: EthSpec")]
 #[ssz(enum_behaviour = "transparent")]
+// todo(eip7457): replace by superstruct'ed SignedBlockContents?
 pub enum PublishBlockRequest<T: EthSpec> {
-    BlockContents(SignedBlockContents<T>),
+    BlockContentsElectra(SignedBlockContentsElectra<T>),
+    BlockContentsDeneb(SignedBlockContentsDeneb<T>),
     Block(Arc<SignedBeaconBlock<T>>),
 }
 
@@ -1746,14 +1752,26 @@ impl<T: EthSpec> PublishBlockRequest<T> {
     pub fn new(
         block: Arc<SignedBeaconBlock<T>>,
         blob_items: Option<(KzgProofs<T>, BlobsList<T>)>,
+        inclusion_list: Option<Arc<SignedInclusionList<T>>>,
     ) -> Self {
-        match blob_items {
-            Some((kzg_proofs, blobs)) => Self::BlockContents(SignedBlockContents {
-                signed_block: block,
-                kzg_proofs,
-                blobs,
-            }),
-            None => Self::Block(block),
+        match (blob_items, inclusion_list) {
+            (Some((kzg_proofs, blobs)), Some(inclusion_list)) => {
+                Self::BlockContentsElectra(SignedBlockContentsElectra {
+                    signed_block: block,
+                    kzg_proofs,
+                    blobs,
+                    inclusion_list,
+                })
+            }
+            (Some((kzg_proofs, blobs)), None) => {
+                Self::BlockContentsDeneb(SignedBlockContentsDeneb {
+                    signed_block: block,
+                    kzg_proofs,
+                    blobs,
+                })
+            }
+            (None, None) => Self::Block(block),
+            (None, Some(_)) => todo!("todo(eip7457): handle this bogus case"),
         }
     }
 
@@ -1764,7 +1782,7 @@ impl<T: EthSpec> PublishBlockRequest<T> {
                 SignedBeaconBlock::from_ssz_bytes_for_fork(bytes, fork_name)
                     .map(|block| PublishBlockRequest::Block(Arc::new(block)))
             }
-            ForkName::Deneb | ForkName::Electra => {
+            ForkName::Deneb => {
                 let mut builder = ssz::SszDecoderBuilder::new(bytes);
                 builder.register_anonymous_variable_length_item()?;
                 builder.register_type::<KzgProofs<T>>()?;
@@ -1779,14 +1797,19 @@ impl<T: EthSpec> PublishBlockRequest<T> {
                 Ok(PublishBlockRequest::new(
                     Arc::new(block),
                     Some((kzg_proofs, blobs)),
+                    None,
                 ))
+            }
+            ForkName::Electra => {
+                todo!("todo(eip7547)")
             }
         }
     }
 
     pub fn signed_block(&self) -> &Arc<SignedBeaconBlock<T>> {
         match self {
-            PublishBlockRequest::BlockContents(block_and_sidecars) => {
+            PublishBlockRequest::BlockContentsElectra(_) => todo!("todo(eip7547)"),
+            PublishBlockRequest::BlockContentsDeneb(block_and_sidecars) => {
                 &block_and_sidecars.signed_block
             }
             PublishBlockRequest::Block(block) => block,
@@ -1795,11 +1818,20 @@ impl<T: EthSpec> PublishBlockRequest<T> {
 
     pub fn deconstruct(self) -> SignedBlockContentsTuple<T> {
         match self {
-            PublishBlockRequest::BlockContents(block_and_sidecars) => (
-                block_and_sidecars.signed_block,
-                Some((block_and_sidecars.kzg_proofs, block_and_sidecars.blobs)),
+            PublishBlockRequest::BlockContentsElectra(block_contents_electra) => (
+                block_contents_electra.signed_block,
+                Some((
+                    block_contents_electra.kzg_proofs,
+                    block_contents_electra.blobs,
+                )),
+                Some(block_contents_electra.inclusion_list),
             ),
-            PublishBlockRequest::Block(block) => (block, None),
+            PublishBlockRequest::BlockContentsDeneb(block_contents_deneb) => (
+                block_contents_deneb.signed_block,
+                Some((block_contents_deneb.kzg_proofs, block_contents_deneb.blobs)),
+                None,
+            ),
+            PublishBlockRequest::Block(block) => (block, None, None),
         }
     }
 }
@@ -1814,16 +1846,16 @@ pub fn into_full_block_and_blobs<T: EthSpec>(
             let signed_block = blinded_block
                 .try_into_full_block(None)
                 .ok_or("Failed to build full block with payload".to_string())?;
-            Ok(PublishBlockRequest::new(Arc::new(signed_block), None))
+            Ok(PublishBlockRequest::new(Arc::new(signed_block), None, None))
         }
         // This variant implies a pre-deneb block
         Some(FullPayloadContents::Payload(execution_payload)) => {
             let signed_block = blinded_block
                 .try_into_full_block(Some(execution_payload))
                 .ok_or("Failed to build full block with payload".to_string())?;
-            Ok(PublishBlockRequest::new(Arc::new(signed_block), None))
+            Ok(PublishBlockRequest::new(Arc::new(signed_block), None, None))
         }
-        // This variant implies a post-deneb block
+        // This variant implies a deneb block
         Some(FullPayloadContents::PayloadAndBlobs(payload_and_blobs)) => {
             let signed_block = blinded_block
                 .try_into_full_block(Some(payload_and_blobs.execution_payload))
@@ -1835,6 +1867,22 @@ pub fn into_full_block_and_blobs<T: EthSpec>(
                     payload_and_blobs.blobs_bundle.proofs,
                     payload_and_blobs.blobs_bundle.blobs,
                 )),
+                None,
+            ))
+        }
+        // This variant implies a post-electra block
+        Some(FullPayloadContents::PayloadAndBlobsAndInclusionList(payload_and_blobs_and_inclusion_list)) => {
+            let signed_block = blinded_block
+                .try_into_full_block(Some(payload_and_blobs_and_inclusion_list.execution_payload))
+                .ok_or("Failed to build full block with payload".to_string())?;
+
+            Ok(PublishBlockRequest::new(
+                Arc::new(signed_block),
+                Some((
+                    payload_and_blobs_and_inclusion_list.blobs_bundle.proofs,
+                    payload_and_blobs_and_inclusion_list.blobs_bundle.blobs,
+                )),
+                Some(Arc::new(payload_and_blobs_and_inclusion_list.inclusion_list))
             ))
         }
     }
@@ -1857,17 +1905,28 @@ impl<T: EthSpec> TryFrom<Arc<SignedBeaconBlock<T>>> for PublishBlockRequest<T> {
 
 impl<T: EthSpec> From<SignedBlockContentsTuple<T>> for PublishBlockRequest<T> {
     fn from(block_contents_tuple: SignedBlockContentsTuple<T>) -> Self {
-        PublishBlockRequest::new(block_contents_tuple.0, block_contents_tuple.1)
+        PublishBlockRequest::new(block_contents_tuple.0, block_contents_tuple.1, block_contents_tuple.2)
     }
 }
 
+// todo(eip7457): make these a superstruct?
 #[derive(Debug, Clone, Serialize, Deserialize, Encode)]
 #[serde(bound = "T: EthSpec")]
-pub struct SignedBlockContents<T: EthSpec> {
+pub struct SignedBlockContentsDeneb<T: EthSpec> {
     pub signed_block: Arc<SignedBeaconBlock<T>>,
     pub kzg_proofs: KzgProofs<T>,
     #[serde(with = "ssz_types::serde_utils::list_of_hex_fixed_vec")]
     pub blobs: BlobsList<T>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode)]
+#[serde(bound = "T: EthSpec")]
+pub struct SignedBlockContentsElectra<T: EthSpec> {
+    pub signed_block: Arc<SignedBeaconBlock<T>>,
+    pub kzg_proofs: KzgProofs<T>,
+    #[serde(with = "ssz_types::serde_utils::list_of_hex_fixed_vec")]
+    pub blobs: BlobsList<T>,
+    pub inclusion_list: Arc<SignedInclusionList<T>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode)]
@@ -1906,9 +1965,12 @@ impl<T: EthSpec> ForkVersionDeserialize for BlockContents<T> {
 #[serde(untagged)]
 #[serde(bound = "E: EthSpec")]
 #[ssz(enum_behaviour = "transparent")]
+// TODO(eip7547): also candidate for superstruct
+#[allow(clippy::large_enum_variant)]
 pub enum FullPayloadContents<E: EthSpec> {
     Payload(ExecutionPayload<E>),
     PayloadAndBlobs(ExecutionPayloadAndBlobs<E>),
+    PayloadAndBlobsAndInclusionList(ExecutionPayloadAndBlobsAndInclusionList<E>),
 }
 
 impl<E: EthSpec> FullPayloadContents<E> {
@@ -1931,6 +1993,9 @@ impl<E: EthSpec> FullPayloadContents<E> {
             FullPayloadContents::PayloadAndBlobs(payload_and_blobs) => {
                 &payload_and_blobs.execution_payload
             }
+            FullPayloadContents::PayloadAndBlobsAndInclusionList(_) => {
+                todo!("todo(eip7547)")
+            }
         }
     }
 
@@ -1945,6 +2010,9 @@ impl<E: EthSpec> FullPayloadContents<E> {
                 payload_and_blobs.execution_payload,
                 Some(payload_and_blobs.blobs_bundle),
             ),
+            FullPayloadContents::PayloadAndBlobsAndInclusionList(_payload_and_blobs_and_inclusion_list) => {
+                todo!("todo(eip7547)")
+            }
         }
     }
 }
@@ -1973,6 +2041,14 @@ impl<E: EthSpec> ForkVersionDeserialize for FullPayloadContents<E> {
 pub struct ExecutionPayloadAndBlobs<E: EthSpec> {
     pub execution_payload: ExecutionPayload<E>,
     pub blobs_bundle: BlobsBundle<E>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode)]
+#[serde(bound = "E: EthSpec")]
+pub struct ExecutionPayloadAndBlobsAndInclusionList<E: EthSpec> {
+    pub execution_payload: ExecutionPayload<E>,
+    pub blobs_bundle: BlobsBundle<E>,
+    pub inclusion_list: SignedInclusionList<E>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Encode, Decode)]

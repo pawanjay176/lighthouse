@@ -8,7 +8,6 @@ use ssz::{Decode, Encode};
 use std::boxed::Box;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use types::signed_beacon_block_and_inclusion_list::SignedBeaconBlockAndInclusionListElectra;
 use types::{
     Attestation, AttesterSlashing, BlobSidecar, EthSpec, ForkContext, ForkName,
     LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
@@ -21,7 +20,10 @@ use types::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum PubsubMessage<T: EthSpec> {
     /// Gossipsub message providing notification of a new block.
-    BeaconBlock(Arc<SignedBeaconBlock<T>>),
+    BeaconBlockV1(Arc<SignedBeaconBlock<T>>),
+    /// Gossipsub message providing notification of a new block alongside an EIP-7547 inclusion list.
+    // TODO(eip7547): alternatively we could add an Option<Arc<SignedInclusionList<T>>> to V1
+    BeaconBlockV2(Arc<SignedBeaconBlockAndInclusionList<T>>),
     /// Gossipsub message providing notification of a [`BlobSidecar`] along with the subnet id where it was received.
     BlobSidecar(Box<(u64, Arc<BlobSidecar<T>>)>),
     /// Gossipsub message providing notification of a Aggregate attestation and associated proof.
@@ -116,7 +118,8 @@ impl<T: EthSpec> PubsubMessage<T> {
     /// Returns the kind of gossipsub topic associated with the message.
     pub fn kind(&self) -> GossipKind {
         match self {
-            PubsubMessage::BeaconBlock(_) => GossipKind::BeaconBlock,
+            PubsubMessage::BeaconBlockV1(_) => GossipKind::BeaconBlock,
+            PubsubMessage::BeaconBlockV2(_) => GossipKind::BeaconBlock,
             PubsubMessage::BlobSidecar(blob_sidecar_data) => {
                 GossipKind::BlobSidecar(blob_sidecar_data.0)
             }
@@ -172,44 +175,52 @@ impl<T: EthSpec> PubsubMessage<T> {
                         ))))
                     }
                     GossipKind::BeaconBlock => {
-                        let beacon_block =
-                            match fork_context.from_context_bytes(gossip_topic.fork_digest) {
-                                Some(ForkName::Base) => SignedBeaconBlock::<T>::Base(
+                        let pubsub_message = match fork_context
+                            .from_context_bytes(gossip_topic.fork_digest)
+                        {
+                            Some(ForkName::Base) => {
+                                PubsubMessage::BeaconBlockV1(Arc::new(SignedBeaconBlock::<T>::Base(
                                     SignedBeaconBlockBase::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
-                                ),
-                                Some(ForkName::Altair) => SignedBeaconBlock::<T>::Altair(
+                                )))
+                            }
+                            Some(ForkName::Altair) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                SignedBeaconBlock::<T>::Altair(
                                     SignedBeaconBlockAltair::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
                                 ),
-                                Some(ForkName::Merge) => SignedBeaconBlock::<T>::Merge(
+                            )),
+                            Some(ForkName::Merge) => {
+                                PubsubMessage::BeaconBlockV1(Arc::new(SignedBeaconBlock::<T>::Merge(
                                     SignedBeaconBlockMerge::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
-                                ),
-                                Some(ForkName::Capella) => SignedBeaconBlock::<T>::Capella(
+                                )))
+                            }
+                            Some(ForkName::Capella) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                SignedBeaconBlock::<T>::Capella(
                                     SignedBeaconBlockCapella::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
                                 ),
-                                Some(ForkName::Deneb) => SignedBeaconBlock::<T>::Deneb(
+                            )),
+                            Some(ForkName::Deneb) => {
+                                PubsubMessage::BeaconBlockV1(Arc::new(SignedBeaconBlock::<T>::Deneb(
                                     SignedBeaconBlockDeneb::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
+                                )))
+                            }
+                            Some(ForkName::Electra) => PubsubMessage::BeaconBlockV2(Arc::new(
+                                SignedBeaconBlockAndInclusionList::from_ssz_bytes(data)
+                                        .map_err(|e| format!("{:?}", e))?,
                                 ),
-                                Some(ForkName::Electra) => todo!("eip7547: this obviously doesnt typecheck: {:?}
-                                    Option 1: introduce PubsubMessage::BeaconBlockV2
-                                    Option 2: change PubsubMessage::BeaconBlock to (Arc<SignedBeaconBlock<T>>, Option<Arc<SignedInclusionList<T>>>) or something...",
-                                    SignedBeaconBlockAndInclusionList::<T>::Electra(
-                                        SignedBeaconBlockAndInclusionListElectra::from_ssz_bytes(data)
-                                            .map_err(|e| format!("{:?}", e))?,
-                                    )
-                                ),
-                                None => {
-                                    return Err(format!(
-                                        "Unknown gossipsub fork digest: {:?}",
-                                        gossip_topic.fork_digest
-                                    ))
-                                }
-                            };
-                        Ok(PubsubMessage::BeaconBlock(Arc::new(beacon_block)))
+                            ),
+                            None => {
+                                return Err(format!(
+                                    "Unknown gossipsub fork digest: {:?}",
+                                    gossip_topic.fork_digest
+                                ))
+                            }
+                        };
+                        Ok(pubsub_message)
                     }
                     GossipKind::BlobSidecar(blob_index) => {
                         match fork_context.from_context_bytes(gossip_topic.fork_digest) {
@@ -302,7 +313,8 @@ impl<T: EthSpec> PubsubMessage<T> {
         // Also note, that the compression is handled by the `SnappyTransform` struct. Gossipsub will compress the
         // messages for us.
         match &self {
-            PubsubMessage::BeaconBlock(data) => data.as_ssz_bytes(),
+            PubsubMessage::BeaconBlockV1(data) => data.as_ssz_bytes(),
+            PubsubMessage::BeaconBlockV2(data) => data.as_ssz_bytes(),
             PubsubMessage::BlobSidecar(data) => data.1.as_ssz_bytes(),
             PubsubMessage::AggregateAndProofAttestation(data) => data.as_ssz_bytes(),
             PubsubMessage::VoluntaryExit(data) => data.as_ssz_bytes(),
@@ -321,11 +333,17 @@ impl<T: EthSpec> PubsubMessage<T> {
 impl<T: EthSpec> std::fmt::Display for PubsubMessage<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PubsubMessage::BeaconBlock(block) => write!(
+            PubsubMessage::BeaconBlockV1(block) => write!(
                 f,
                 "Beacon Block: slot: {}, proposer_index: {}",
                 block.slot(),
                 block.message().proposer_index()
+            ),
+            PubsubMessage::BeaconBlockV2(block_and_inclusion_list) => write!(
+                f,
+                "Beacon Block with IL: slot: {}, proposer_index: {}",
+                block_and_inclusion_list.signed_block.message.slot,
+                block_and_inclusion_list.signed_block.message.proposer_index,
             ),
             PubsubMessage::BlobSidecar(data) => write!(
                 f,

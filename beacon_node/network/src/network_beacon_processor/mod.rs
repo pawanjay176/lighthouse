@@ -172,6 +172,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         peer_id: PeerId,
         peer_client: Client,
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
+        inclusion_list: Option<Arc<SignedInclusionList<T::EthSpec>>>,
         seen_timestamp: Duration,
     ) -> Result<(), Error<T::EthSpec>> {
         let processor = self.clone();
@@ -185,6 +186,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     peer_id,
                     peer_client,
                     block,
+                    inclusion_list,
                     reprocess_tx,
                     duplicate_cache,
                     invalid_block_storage,

@@ -582,6 +582,8 @@ pub async fn handle_rpc<T: EthSpec>(
 
             Ok(serde_json::to_value(response).unwrap())
         }
+        ENGINE_GET_INCLUSION_LIST => todo!("todo(eip7547)"),
+        ENGINE_NEW_INCLUSION_LIST => todo!("todo(eip7547)"),
         other => Err((
             format!("The method {} does not exist/is not available", other),
             METHOD_NOT_FOUND_CODE,

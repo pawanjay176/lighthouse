@@ -286,15 +286,29 @@ impl<T: BeaconChainTypes> Router<T> {
                         timestamp_now(),
                     ),
                 ),
-            PubsubMessage::BeaconBlock(block) => self.handle_beacon_processor_send_result(
+            PubsubMessage::BeaconBlockV1(block) => self.handle_beacon_processor_send_result(
                 self.network_beacon_processor.send_gossip_beacon_block(
                     message_id,
                     peer_id,
                     self.network_globals.client(&peer_id),
                     block,
+                    None,
                     timestamp_now(),
                 ),
             ),
+            PubsubMessage::BeaconBlockV2(block_and_inclusion_list) => {
+                let block_and_inclusion_list = Arc::unwrap_or_clone(block_and_inclusion_list);
+                self.handle_beacon_processor_send_result(
+                    self.network_beacon_processor.send_gossip_beacon_block(
+                        message_id,
+                        peer_id,
+                        self.network_globals.client(&peer_id),
+                        Arc::new(SignedBeaconBlock::Electra(block_and_inclusion_list.signed_block)),
+                        Some(Arc::new(block_and_inclusion_list.signed_inclusion_list)),
+                        timestamp_now(),
+                    ),
+                )
+            }
             PubsubMessage::BlobSidecar(data) => {
                 let (blob_index, blob_sidecar) = *data;
                 self.handle_beacon_processor_send_result(

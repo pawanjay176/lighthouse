@@ -52,6 +52,12 @@ pub const ENGINE_GET_PAYLOAD_BODIES_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ENGINE_EXCHANGE_CAPABILITIES: &str = "engine_exchangeCapabilities";
 pub const ENGINE_EXCHANGE_CAPABILITIES_TIMEOUT: Duration = Duration::from_secs(1);
 
+pub const ENGINE_NEW_INCLUSION_LIST: &str = "engine_newInclusionListV1";
+pub const ENGINE_NEW_INCLUSION_LIST_TIMEOUT: Duration = Duration::from_secs(1);
+
+pub const ENGINE_GET_INCLUSION_LIST: &str = "engine_getInclusionListV1";
+pub const ENGINE_GET_INCLUSION_LIST_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// This error is returned during a `chainId` call by Geth.
 pub const EIP155_ERROR_STR: &str = "chain not synced beyond EIP-155 replay-protection fork block";
 /// This code is returned by all clients when a method is not supported
@@ -87,6 +93,8 @@ pub static PRE_CAPELLA_ENGINE_CAPABILITIES: EngineCapabilities = EngineCapabilit
     get_payload_v1: true,
     get_payload_v2: false,
     get_payload_v3: false,
+    new_inclusion_list_v1: false,
+    get_inclusion_list_v1: false,
 };
 
 /// Contains methods to convert arbitrary bytes to an ETH2 deposit contract object.
@@ -1082,6 +1090,8 @@ impl HttpJsonRpc {
                 get_payload_v1: capabilities.contains(ENGINE_GET_PAYLOAD_V1),
                 get_payload_v2: capabilities.contains(ENGINE_GET_PAYLOAD_V2),
                 get_payload_v3: capabilities.contains(ENGINE_GET_PAYLOAD_V3),
+                new_inclusion_list_v1: capabilities.contains(ENGINE_NEW_INCLUSION_LIST),
+                get_inclusion_list_v1: capabilities.contains(ENGINE_GET_INCLUSION_LIST),
             }),
         }
     }

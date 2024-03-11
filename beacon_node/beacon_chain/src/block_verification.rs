@@ -101,7 +101,7 @@ use tree_hash::TreeHash;
 use types::{
     BeaconBlockRef, BeaconState, BeaconStateError, ChainSpec, CloneConfig, Epoch, EthSpec,
     ExecutionBlockHash, Hash256, InconsistentFork, PublicKey, PublicKeyBytes, RelativeEpoch,
-    SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
+    SignedBeaconBlock, SignedBeaconBlockHeader, SignedInclusionList, Slot,
 };
 use types::{BlobSidecar, ExecPayload};
 
@@ -642,6 +642,7 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes>(
 #[derivative(Debug(bound = "T: BeaconChainTypes"))]
 pub struct GossipVerifiedBlock<T: BeaconChainTypes> {
     pub block: Arc<SignedBeaconBlock<T::EthSpec>>,
+    pub inclusion_list: Option<Arc<SignedInclusionList<T::EthSpec>>>,
     pub block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
@@ -703,7 +704,7 @@ impl<T: BeaconChainTypes> IntoGossipVerifiedBlockContents<T> for PublishBlockReq
         self,
         chain: &BeaconChain<T>,
     ) -> Result<GossipVerifiedBlockContents<T>, BlockContentsError<T::EthSpec>> {
-        let (block, blobs) = self.deconstruct();
+        let (block, blobs, inclusion_list) = self.deconstruct();
 
         let gossip_verified_blobs = blobs
             .map(|(kzg_proofs, blobs)| {
@@ -722,7 +723,7 @@ impl<T: BeaconChainTypes> IntoGossipVerifiedBlockContents<T> for PublishBlockReq
                 Ok::<_, BlockContentsError<T::EthSpec>>(gossip_verified_blobs)
             })
             .transpose()?;
-        let gossip_verified_block = GossipVerifiedBlock::new(block, chain)?;
+        let gossip_verified_block = GossipVerifiedBlock::new(block, inclusion_list, chain)?;
 
         Ok((gossip_verified_block, gossip_verified_blobs))
     }
@@ -774,6 +775,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
     /// Returns an error if the block is invalid, or if the block was unable to be verified.
     pub fn new(
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
+        inclusion_list: Option<Arc<SignedInclusionList<T::EthSpec>>>,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockError<T::EthSpec>> {
         // If the block is valid for gossip we don't supply it to the slasher here because
@@ -784,7 +786,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         // The `SignedBeaconBlock` and `SignedBeaconBlockHeader` have the same canonical root,
         // but it's way quicker to calculate root of the header since the hash of the tree rooted
         // at `BeaconBlockBody` is already computed in the header.
-        Self::new_without_slasher_checks(block, &header, chain).map_err(|e| {
+        Self::new_without_slasher_checks(block, &header, inclusion_list, chain).map_err(|e| {
             process_block_slash_info::<_, BlockError<T::EthSpec>>(
                 chain,
                 BlockSlashInfo::from_early_error_block(header, e),
@@ -796,6 +798,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
     fn new_without_slasher_checks(
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
         block_header: &SignedBeaconBlockHeader,
+        inclusion_list: Option<Arc<SignedInclusionList<T::EthSpec>>>,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockError<T::EthSpec>> {
         // Ensure the block is the correct structure for the fork at `block.slot()`.
@@ -987,6 +990,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
 
         Ok(Self {
             block,
+            inclusion_list,
             block_root,
             parent,
             consensus_context,

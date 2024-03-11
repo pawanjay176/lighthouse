@@ -667,6 +667,8 @@ pub struct EngineCapabilities {
     pub get_payload_v1: bool,
     pub get_payload_v2: bool,
     pub get_payload_v3: bool,
+    pub new_inclusion_list_v1: bool,
+    pub get_inclusion_list_v1: bool,
 }
 
 impl EngineCapabilities {

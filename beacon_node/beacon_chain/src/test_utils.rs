@@ -885,9 +885,12 @@ where
             SignedBeaconBlock::Base(_)
             | SignedBeaconBlock::Altair(_)
             | SignedBeaconBlock::Merge(_)
-            | SignedBeaconBlock::Capella(_) => (signed_block, None),
-            SignedBeaconBlock::Deneb(_) | SignedBeaconBlock::Electra(_) => {
-                (signed_block, block_response.blob_items)
+            | SignedBeaconBlock::Capella(_) => (signed_block, None, None),
+            SignedBeaconBlock::Deneb(_) => {
+                (signed_block, block_response.blob_items, None)
+            },
+            SignedBeaconBlock::Electra(_) => {
+                (signed_block, block_response.blob_items, None) // todo(eip7457)
             }
         };
 
@@ -1875,7 +1878,7 @@ where
         block_contents: SignedBlockContentsTuple<E>,
     ) -> Result<SignedBeaconBlockHash, BlockError<E>> {
         self.set_current_slot(slot);
-        let (block, blob_items) = block_contents;
+        let (block, blob_items, _inclusion_list) = block_contents; // todo(eip7547): introduce into RpcBlock?
 
         let sidecars = blob_items
             .map(|(proofs, blobs)| BlobSidecar::build_sidecars(blobs, &block, proofs))

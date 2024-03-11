@@ -30,13 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use tokio::sync::mpsc;
-use types::{
-    Attestation, AttesterSlashing, BlobSidecar, EthSpec, Hash256, IndexedAttestation,
-    LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
-    SignedAggregateAndProof, SignedBeaconBlock, SignedBlsToExecutionChange,
-    SignedContributionAndProof, SignedVoluntaryExit, Slot, SubnetId, SyncCommitteeMessage,
-    SyncSubnetId,
-};
+use types::{Attestation, AttesterSlashing, BlobSidecar, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock, SignedBlsToExecutionChange, SignedContributionAndProof, SignedInclusionList, SignedVoluntaryExit, Slot, SubnetId, SyncCommitteeMessage, SyncSubnetId};
 
 use beacon_processor::{
     work_reprocessing_queue::{
@@ -810,6 +804,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         peer_id: PeerId,
         peer_client: Client,
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
+        inclusion_list: Option<Arc<SignedInclusionList<T::EthSpec>>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage>,
         duplicate_cache: DuplicateCache,
         invalid_block_storage: InvalidBlockStorage,
@@ -821,6 +816,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 peer_id,
                 peer_client,
                 block,
+                inclusion_list.clone(),
                 reprocess_tx.clone(),
                 seen_duration,
             )
@@ -853,12 +849,14 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
     /// if it passes gossip propagation criteria, tell the network thread to forward it.
     ///
     /// Returns the `GossipVerifiedBlock` if verification passes and raises a log if there are errors.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_gossip_unverified_block(
         self: &Arc<Self>,
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
+        inclusion_list: Option<Arc<SignedInclusionList<T::EthSpec>>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage>,
         seen_duration: Duration,
     ) -> Option<GossipVerifiedBlock<T>> {

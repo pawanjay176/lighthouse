@@ -921,7 +921,7 @@ mod test {
             eth1_deposit_index: 0,
         };
 
-        let (signed_beacon_block_hash, (block, maybe_blobs), state) = harness
+        let (signed_beacon_block_hash, (block, maybe_blobs, _), state) = harness
             .add_block_at_slot(target_slot, parent_state)
             .await
             .expect("should add block");
