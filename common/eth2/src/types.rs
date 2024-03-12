@@ -18,8 +18,8 @@ use std::str::{from_utf8, FromStr};
 use std::sync::Arc;
 use std::time::Duration;
 use types::beacon_block_body::KzgCommitments;
-pub use types::*;
 use types::signed_inclusion_list::InclusionList;
+pub use types::*;
 
 #[cfg(feature = "lighthouse")]
 use crate::lighthouse::BlockReward;
@@ -1550,7 +1550,11 @@ pub enum FullBlockContents<T: EthSpec> {
     Block(BeaconBlock<T>),
 }
 
-pub type BlockContentsTuple<T> = (BeaconBlock<T>, Option<(KzgProofs<T>, BlobsList<T>)>, Option<InclusionList<T>>);
+pub type BlockContentsTuple<T> = (
+    BeaconBlock<T>,
+    Option<(KzgProofs<T>, BlobsList<T>)>,
+    Option<InclusionList<T>>,
+);
 
 // This value should never be used
 fn dummy_consensus_version() -> ForkName {
@@ -1631,7 +1635,9 @@ impl<T: EthSpec> FullBlockContents<T> {
 
     pub fn block(&self) -> &BeaconBlock<T> {
         match self {
-            FullBlockContents::BlockContentsElectra(block_and_sidecars_and_il) => &block_and_sidecars_and_il.block,
+            FullBlockContents::BlockContentsElectra(block_and_sidecars_and_il) => {
+                &block_and_sidecars_and_il.block
+            }
             FullBlockContents::BlockContentsDeneb(block_and_sidecars) => &block_and_sidecars.block,
             FullBlockContents::Block(block) => block,
         }
@@ -1641,7 +1647,10 @@ impl<T: EthSpec> FullBlockContents<T> {
         match self {
             FullBlockContents::BlockContentsElectra(block_and_sidecars_and_il) => (
                 block_and_sidecars_and_il.block,
-                Some((block_and_sidecars_and_il.kzg_proofs, block_and_sidecars_and_il.blobs)),
+                Some((
+                    block_and_sidecars_and_il.kzg_proofs,
+                    block_and_sidecars_and_il.blobs,
+                )),
                 Some(block_and_sidecars_and_il.inclusion_list),
             ),
             FullBlockContents::BlockContentsDeneb(block_and_sidecars) => (
@@ -1688,7 +1697,9 @@ impl<T: EthSpec> ForkVersionDeserialize for FullBlockContents<T> {
 impl<T: EthSpec> Into<BeaconBlock<T>> for FullBlockContents<T> {
     fn into(self) -> BeaconBlock<T> {
         match self {
-            Self::BlockContentsElectra(block_and_sidecars_and_il) => block_and_sidecars_and_il.block,
+            Self::BlockContentsElectra(block_and_sidecars_and_il) => {
+                block_and_sidecars_and_il.block
+            }
             Self::BlockContentsDeneb(block_and_sidecars) => block_and_sidecars.block,
             Self::Block(block) => block,
         }
@@ -1882,7 +1893,9 @@ pub fn into_full_block_and_blobs<T: EthSpec>(
             ))
         }
         // This variant implies a post-electra block
-        Some(FullPayloadContents::PayloadAndBlobsAndInclusionList(payload_and_blobs_and_inclusion_list)) => {
+        Some(FullPayloadContents::PayloadAndBlobsAndInclusionList(
+            payload_and_blobs_and_inclusion_list,
+        )) => {
             let signed_block = blinded_block
                 .try_into_full_block(Some(payload_and_blobs_and_inclusion_list.execution_payload))
                 .ok_or("Failed to build full block with payload".to_string())?;
@@ -1893,7 +1906,9 @@ pub fn into_full_block_and_blobs<T: EthSpec>(
                     payload_and_blobs_and_inclusion_list.blobs_bundle.proofs,
                     payload_and_blobs_and_inclusion_list.blobs_bundle.blobs,
                 )),
-                Some(Arc::new(payload_and_blobs_and_inclusion_list.inclusion_list))
+                Some(Arc::new(
+                    payload_and_blobs_and_inclusion_list.inclusion_list,
+                )),
             ))
         }
     }
@@ -1916,7 +1931,11 @@ impl<T: EthSpec> TryFrom<Arc<SignedBeaconBlock<T>>> for PublishBlockRequest<T> {
 
 impl<T: EthSpec> From<SignedBlockContentsTuple<T>> for PublishBlockRequest<T> {
     fn from(block_contents_tuple: SignedBlockContentsTuple<T>) -> Self {
-        PublishBlockRequest::new(block_contents_tuple.0, block_contents_tuple.1, block_contents_tuple.2)
+        PublishBlockRequest::new(
+            block_contents_tuple.0,
+            block_contents_tuple.1,
+            block_contents_tuple.2,
+        )
     }
 }
 
@@ -2031,7 +2050,9 @@ impl<E: EthSpec> FullPayloadContents<E> {
                 payload_and_blobs.execution_payload,
                 Some(payload_and_blobs.blobs_bundle),
             ),
-            FullPayloadContents::PayloadAndBlobsAndInclusionList(_payload_and_blobs_and_inclusion_list) => {
+            FullPayloadContents::PayloadAndBlobsAndInclusionList(
+                _payload_and_blobs_and_inclusion_list,
+            ) => {
                 todo!("todo(eip7547)")
             }
         }

@@ -46,6 +46,7 @@ use types::beacon_block_body::KzgCommitments;
 use types::builder_bid::BuilderBid;
 use types::non_zero_usize::new_non_zero_usize;
 use types::payload::BlockProductionVersion;
+use types::signed_inclusion_list::InclusionList;
 use types::{
     AbstractExecPayload, BlobsList, ExecutionPayloadDeneb, KzgProofs, SignedBlindedBeaconBlock,
 };
@@ -54,7 +55,6 @@ use types::{
     ExecutionPayloadElectra, ExecutionPayloadMerge, FullPayload, ProposerPreparationData,
     PublicKeyBytes, Signature, Slot,
 };
-use types::signed_inclusion_list::InclusionList;
 
 mod block_hash;
 mod engine_api;
@@ -295,7 +295,13 @@ impl<T: EthSpec, Payload: AbstractExecPayload<T>> BlockProposalContents<T, Paylo
                 None,
                 block_value,
             ),
-            BlockProposalContents::PayloadAndBlobsAndInclusionList { payload, block_value, kzg_commitments, blobs_and_proofs, inclusion_list } => (
+            BlockProposalContents::PayloadAndBlobsAndInclusionList {
+                payload,
+                block_value,
+                kzg_commitments,
+                blobs_and_proofs,
+                inclusion_list,
+            } => (
                 payload,
                 Some(kzg_commitments),
                 blobs_and_proofs,

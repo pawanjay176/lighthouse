@@ -1,5 +1,7 @@
 use beacon_chain::{BeaconBlockResponse, BeaconBlockResponseWrapper, BlockProductionError};
-use eth2::types::{BlockContentsDeneb, BlockContentsElectra, FullBlockContents, ProduceBlockV3Response};
+use eth2::types::{
+    BlockContentsDeneb, BlockContentsElectra, FullBlockContents, ProduceBlockV3Response,
+};
 use types::{EthSpec, ForkName};
 type Error = warp::reject::Rejection;
 
@@ -38,7 +40,7 @@ pub fn build_block_contents<E: EthSpec>(
                         blobs,
                     }),
                 ))
-            },
+            }
             ForkName::Electra => {
                 let BeaconBlockResponse {
                     block,
@@ -66,10 +68,10 @@ pub fn build_block_contents<E: EthSpec>(
                         block,
                         kzg_proofs,
                         blobs,
-                        inclusion_list
+                        inclusion_list,
                     }),
                 ))
-            },
+            }
         },
     }
 }

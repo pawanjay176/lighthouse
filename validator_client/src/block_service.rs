@@ -443,7 +443,13 @@ impl<T: SlotClock + 'static, E: EthSpec> BlockService<T, E> {
                 self.validator_store
                     .sign_block(*validator_pubkey, block, slot)
                     .await
-                    .map(|b| SignedBlock::Full(PublishBlockRequest::new(Arc::new(b), maybe_blobs, todo!("todo(eip7547): sign IL"))))
+                    .map(|b| {
+                        SignedBlock::Full(PublishBlockRequest::new(
+                            Arc::new(b),
+                            maybe_blobs,
+                            todo!("todo(eip7547): sign IL"),
+                        ))
+                    })
             }
             UnsignedBlock::Blinded(block) => self
                 .validator_store

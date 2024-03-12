@@ -886,9 +886,7 @@ where
             | SignedBeaconBlock::Altair(_)
             | SignedBeaconBlock::Merge(_)
             | SignedBeaconBlock::Capella(_) => (signed_block, None, None),
-            SignedBeaconBlock::Deneb(_) => {
-                (signed_block, block_response.blob_items, None)
-            },
+            SignedBeaconBlock::Deneb(_) => (signed_block, block_response.blob_items, None),
             SignedBeaconBlock::Electra(_) => {
                 (signed_block, block_response.blob_items, None) // todo(eip7457)
             }
@@ -961,12 +959,12 @@ where
             | SignedBeaconBlock::Altair(_)
             | SignedBeaconBlock::Merge(_)
             | SignedBeaconBlock::Capella(_) => (signed_block, None, None),
-            SignedBeaconBlock::Deneb(_) => {
-                (signed_block, block_response.blob_items, None)
-            }
-            SignedBeaconBlock::Electra(_) => {
-                (signed_block, block_response.blob_items, todo!("todo(eip7547): signed_inclusion_list"))
-            }
+            SignedBeaconBlock::Deneb(_) => (signed_block, block_response.blob_items, None),
+            SignedBeaconBlock::Electra(_) => (
+                signed_block,
+                block_response.blob_items,
+                todo!("todo(eip7547): signed_inclusion_list"),
+            ),
         };
         (block_contents, pre_state)
     }
@@ -1766,7 +1764,8 @@ where
         assert_ne!(slot, 0, "can't produce a block at slot 0");
         assert!(slot >= state.slot());
 
-        let ((block, blobs, inclusion_list), state) = self.make_block_return_pre_state(state, slot).await;
+        let ((block, blobs, inclusion_list), state) =
+            self.make_block_return_pre_state(state, slot).await;
 
         let (mut block, _) = (*block).clone().deconstruct();
 
@@ -1792,7 +1791,8 @@ where
         assert_ne!(slot, 0, "can't produce a block at slot 0");
         assert!(slot >= state.slot());
 
-        let ((block, mut blobs, inclusion_list), state) = self.make_block_return_pre_state(state, slot).await;
+        let ((block, mut blobs, inclusion_list), state) =
+            self.make_block_return_pre_state(state, slot).await;
 
         let (block, _) = (*block).clone().deconstruct();
 

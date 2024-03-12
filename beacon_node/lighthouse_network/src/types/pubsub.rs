@@ -175,51 +175,49 @@ impl<T: EthSpec> PubsubMessage<T> {
                         ))))
                     }
                     GossipKind::BeaconBlock => {
-                        let pubsub_message = match fork_context
-                            .from_context_bytes(gossip_topic.fork_digest)
-                        {
-                            Some(ForkName::Base) => {
-                                PubsubMessage::BeaconBlockV1(Arc::new(SignedBeaconBlock::<T>::Base(
-                                    SignedBeaconBlockBase::from_ssz_bytes(data)
+                        let pubsub_message =
+                            match fork_context.from_context_bytes(gossip_topic.fork_digest) {
+                                Some(ForkName::Base) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                    SignedBeaconBlock::<T>::Base(
+                                        SignedBeaconBlockBase::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    ),
+                                )),
+                                Some(ForkName::Altair) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                    SignedBeaconBlock::<T>::Altair(
+                                        SignedBeaconBlockAltair::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    ),
+                                )),
+                                Some(ForkName::Merge) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                    SignedBeaconBlock::<T>::Merge(
+                                        SignedBeaconBlockMerge::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    ),
+                                )),
+                                Some(ForkName::Capella) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                    SignedBeaconBlock::<T>::Capella(
+                                        SignedBeaconBlockCapella::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    ),
+                                )),
+                                Some(ForkName::Deneb) => PubsubMessage::BeaconBlockV1(Arc::new(
+                                    SignedBeaconBlock::<T>::Deneb(
+                                        SignedBeaconBlockDeneb::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    ),
+                                )),
+                                Some(ForkName::Electra) => PubsubMessage::BeaconBlockV2(Arc::new(
+                                    SignedBeaconBlockAndInclusionList::from_ssz_bytes(data)
                                         .map_err(|e| format!("{:?}", e))?,
-                                )))
-                            }
-                            Some(ForkName::Altair) => PubsubMessage::BeaconBlockV1(Arc::new(
-                                SignedBeaconBlock::<T>::Altair(
-                                    SignedBeaconBlockAltair::from_ssz_bytes(data)
-                                        .map_err(|e| format!("{:?}", e))?,
-                                ),
-                            )),
-                            Some(ForkName::Merge) => {
-                                PubsubMessage::BeaconBlockV1(Arc::new(SignedBeaconBlock::<T>::Merge(
-                                    SignedBeaconBlockMerge::from_ssz_bytes(data)
-                                        .map_err(|e| format!("{:?}", e))?,
-                                )))
-                            }
-                            Some(ForkName::Capella) => PubsubMessage::BeaconBlockV1(Arc::new(
-                                SignedBeaconBlock::<T>::Capella(
-                                    SignedBeaconBlockCapella::from_ssz_bytes(data)
-                                        .map_err(|e| format!("{:?}", e))?,
-                                ),
-                            )),
-                            Some(ForkName::Deneb) => {
-                                PubsubMessage::BeaconBlockV1(Arc::new(SignedBeaconBlock::<T>::Deneb(
-                                    SignedBeaconBlockDeneb::from_ssz_bytes(data)
-                                        .map_err(|e| format!("{:?}", e))?,
-                                )))
-                            }
-                            Some(ForkName::Electra) => PubsubMessage::BeaconBlockV2(Arc::new(
-                                SignedBeaconBlockAndInclusionList::from_ssz_bytes(data)
-                                        .map_err(|e| format!("{:?}", e))?,
-                                ),
-                            ),
-                            None => {
-                                return Err(format!(
-                                    "Unknown gossipsub fork digest: {:?}",
-                                    gossip_topic.fork_digest
-                                ))
-                            }
-                        };
+                                )),
+                                None => {
+                                    return Err(format!(
+                                        "Unknown gossipsub fork digest: {:?}",
+                                        gossip_topic.fork_digest
+                                    ))
+                                }
+                            };
                         Ok(pubsub_message)
                     }
                     GossipKind::BlobSidecar(blob_index) => {

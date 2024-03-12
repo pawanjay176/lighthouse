@@ -123,8 +123,8 @@ use tree_hash::TreeHash;
 use types::beacon_state::CloneConfig;
 use types::blob_sidecar::{BlobSidecarList, FixedBlobSidecarList};
 use types::payload::BlockProductionVersion;
-use types::*;
 use types::signed_inclusion_list::InclusionList;
+use types::*;
 
 pub type ForkChoiceError = fork_choice::Error<crate::ForkChoiceStoreError>;
 
@@ -5138,64 +5138,37 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             bls_to_execution_changes,
         } = partial_beacon_block;
 
-        let (inner_block, maybe_blobs_and_proofs, inclusion_list, execution_payload_value) = match &state {
-            BeaconState::Base(_) => (
-                BeaconBlock::Base(BeaconBlockBase {
-                    slot,
-                    proposer_index,
-                    parent_root,
-                    state_root: Hash256::zero(),
-                    body: BeaconBlockBodyBase {
-                        randao_reveal,
-                        eth1_data,
-                        graffiti,
-                        proposer_slashings: proposer_slashings.into(),
-                        attester_slashings: attester_slashings.into(),
-                        attestations: attestations.into(),
-                        deposits: deposits.into(),
-                        voluntary_exits: voluntary_exits.into(),
-                        _phantom: PhantomData,
-                    },
-                }),
-                None,
-                None,
-                Uint256::zero(),
-            ),
-            BeaconState::Altair(_) => (
-                BeaconBlock::Altair(BeaconBlockAltair {
-                    slot,
-                    proposer_index,
-                    parent_root,
-                    state_root: Hash256::zero(),
-                    body: BeaconBlockBodyAltair {
-                        randao_reveal,
-                        eth1_data,
-                        graffiti,
-                        proposer_slashings: proposer_slashings.into(),
-                        attester_slashings: attester_slashings.into(),
-                        attestations: attestations.into(),
-                        deposits: deposits.into(),
-                        voluntary_exits: voluntary_exits.into(),
-                        sync_aggregate: sync_aggregate
-                            .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                        _phantom: PhantomData,
-                    },
-                }),
-                None,
-                None,
-                Uint256::zero(),
-            ),
-            BeaconState::Merge(_) => {
-                let block_proposal_contents =
-                    block_contents.ok_or(BlockProductionError::MissingExecutionPayload)?;
-                let execution_payload_value = block_proposal_contents.block_value().to_owned();
-                (
-                    BeaconBlock::Merge(BeaconBlockMerge {
+        let (inner_block, maybe_blobs_and_proofs, inclusion_list, execution_payload_value) =
+            match &state {
+                BeaconState::Base(_) => (
+                    BeaconBlock::Base(BeaconBlockBase {
                         slot,
                         proposer_index,
                         parent_root,
                         state_root: Hash256::zero(),
-                        body: BeaconBlockBodyMerge {
+                        body: BeaconBlockBodyBase {
+                            randao_reveal,
+                            eth1_data,
+                            graffiti,
+                            proposer_slashings: proposer_slashings.into(),
+                            attester_slashings: attester_slashings.into(),
+                            attestations: attestations.into(),
+                            deposits: deposits.into(),
+                            voluntary_exits: voluntary_exits.into(),
+                            _phantom: PhantomData,
+                        },
+                    }),
+                    None,
+                    None,
+                    Uint256::zero(),
+                ),
+                BeaconState::Altair(_) => (
+                    BeaconBlock::Altair(BeaconBlockAltair {
+                        slot,
+                        proposer_index,
+                        parent_root,
+                        state_root: Hash256::zero(),
+                        body: BeaconBlockBodyAltair {
                             randao_reveal,
                             eth1_data,
                             graffiti,
@@ -5206,127 +5179,165 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                             voluntary_exits: voluntary_exits.into(),
                             sync_aggregate: sync_aggregate
                                 .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: block_proposal_contents
-                                .to_payload()
-                                .try_into()
-                                .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
+                            _phantom: PhantomData,
                         },
                     }),
                     None,
                     None,
-                    execution_payload_value,
-                )
-            }
-            BeaconState::Capella(_) => {
-                let block_proposal_contents =
-                    block_contents.ok_or(BlockProductionError::MissingExecutionPayload)?;
-                let execution_payload_value = block_proposal_contents.block_value().to_owned();
+                    Uint256::zero(),
+                ),
+                BeaconState::Merge(_) => {
+                    let block_proposal_contents =
+                        block_contents.ok_or(BlockProductionError::MissingExecutionPayload)?;
+                    let execution_payload_value = block_proposal_contents.block_value().to_owned();
+                    (
+                        BeaconBlock::Merge(BeaconBlockMerge {
+                            slot,
+                            proposer_index,
+                            parent_root,
+                            state_root: Hash256::zero(),
+                            body: BeaconBlockBodyMerge {
+                                randao_reveal,
+                                eth1_data,
+                                graffiti,
+                                proposer_slashings: proposer_slashings.into(),
+                                attester_slashings: attester_slashings.into(),
+                                attestations: attestations.into(),
+                                deposits: deposits.into(),
+                                voluntary_exits: voluntary_exits.into(),
+                                sync_aggregate: sync_aggregate
+                                    .ok_or(BlockProductionError::MissingSyncAggregate)?,
+                                execution_payload: block_proposal_contents
+                                    .to_payload()
+                                    .try_into()
+                                    .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
+                            },
+                        }),
+                        None,
+                        None,
+                        execution_payload_value,
+                    )
+                }
+                BeaconState::Capella(_) => {
+                    let block_proposal_contents =
+                        block_contents.ok_or(BlockProductionError::MissingExecutionPayload)?;
+                    let execution_payload_value = block_proposal_contents.block_value().to_owned();
 
-                (
-                    BeaconBlock::Capella(BeaconBlockCapella {
-                        slot,
-                        proposer_index,
-                        parent_root,
-                        state_root: Hash256::zero(),
-                        body: BeaconBlockBodyCapella {
-                            randao_reveal,
-                            eth1_data,
-                            graffiti,
-                            proposer_slashings: proposer_slashings.into(),
-                            attester_slashings: attester_slashings.into(),
-                            attestations: attestations.into(),
-                            deposits: deposits.into(),
-                            voluntary_exits: voluntary_exits.into(),
-                            sync_aggregate: sync_aggregate
-                                .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: block_proposal_contents
-                                .to_payload()
-                                .try_into()
-                                .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
-                            bls_to_execution_changes: bls_to_execution_changes.into(),
-                        },
-                    }),
-                    None,
-                    None,
-                    execution_payload_value,
-                )
-            }
-            BeaconState::Deneb(_) => {
-                let (payload, kzg_commitments, maybe_blobs_and_proofs, _, execution_payload_value) =
-                    block_contents
+                    (
+                        BeaconBlock::Capella(BeaconBlockCapella {
+                            slot,
+                            proposer_index,
+                            parent_root,
+                            state_root: Hash256::zero(),
+                            body: BeaconBlockBodyCapella {
+                                randao_reveal,
+                                eth1_data,
+                                graffiti,
+                                proposer_slashings: proposer_slashings.into(),
+                                attester_slashings: attester_slashings.into(),
+                                attestations: attestations.into(),
+                                deposits: deposits.into(),
+                                voluntary_exits: voluntary_exits.into(),
+                                sync_aggregate: sync_aggregate
+                                    .ok_or(BlockProductionError::MissingSyncAggregate)?,
+                                execution_payload: block_proposal_contents
+                                    .to_payload()
+                                    .try_into()
+                                    .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
+                                bls_to_execution_changes: bls_to_execution_changes.into(),
+                            },
+                        }),
+                        None,
+                        None,
+                        execution_payload_value,
+                    )
+                }
+                BeaconState::Deneb(_) => {
+                    let (
+                        payload,
+                        kzg_commitments,
+                        maybe_blobs_and_proofs,
+                        _,
+                        execution_payload_value,
+                    ) = block_contents
                         .ok_or(BlockProductionError::MissingExecutionPayload)?
                         .deconstruct();
 
-                (
-                    BeaconBlock::Deneb(BeaconBlockDeneb {
-                        slot,
-                        proposer_index,
-                        parent_root,
-                        state_root: Hash256::zero(),
-                        body: BeaconBlockBodyDeneb {
-                            randao_reveal,
-                            eth1_data,
-                            graffiti,
-                            proposer_slashings: proposer_slashings.into(),
-                            attester_slashings: attester_slashings.into(),
-                            attestations: attestations.into(),
-                            deposits: deposits.into(),
-                            voluntary_exits: voluntary_exits.into(),
-                            sync_aggregate: sync_aggregate
-                                .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: payload
-                                .try_into()
-                                .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
-                            bls_to_execution_changes: bls_to_execution_changes.into(),
-                            blob_kzg_commitments: kzg_commitments.ok_or(
-                                BlockProductionError::MissingKzgCommitment(
-                                    "Kzg commitments missing from block contents".to_string(),
-                                ),
-                            )?,
-                        },
-                    }),
-                    maybe_blobs_and_proofs,
-                    None,
-                    execution_payload_value,
-                )
-            }
-            BeaconState::Electra(_) => {
-                let (payload, kzg_commitments, maybe_blobs_and_proofs, inclusion_list, execution_payload_value) =
-                    block_contents
+                    (
+                        BeaconBlock::Deneb(BeaconBlockDeneb {
+                            slot,
+                            proposer_index,
+                            parent_root,
+                            state_root: Hash256::zero(),
+                            body: BeaconBlockBodyDeneb {
+                                randao_reveal,
+                                eth1_data,
+                                graffiti,
+                                proposer_slashings: proposer_slashings.into(),
+                                attester_slashings: attester_slashings.into(),
+                                attestations: attestations.into(),
+                                deposits: deposits.into(),
+                                voluntary_exits: voluntary_exits.into(),
+                                sync_aggregate: sync_aggregate
+                                    .ok_or(BlockProductionError::MissingSyncAggregate)?,
+                                execution_payload: payload
+                                    .try_into()
+                                    .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
+                                bls_to_execution_changes: bls_to_execution_changes.into(),
+                                blob_kzg_commitments: kzg_commitments.ok_or(
+                                    BlockProductionError::MissingKzgCommitment(
+                                        "Kzg commitments missing from block contents".to_string(),
+                                    ),
+                                )?,
+                            },
+                        }),
+                        maybe_blobs_and_proofs,
+                        None,
+                        execution_payload_value,
+                    )
+                }
+                BeaconState::Electra(_) => {
+                    let (
+                        payload,
+                        kzg_commitments,
+                        maybe_blobs_and_proofs,
+                        inclusion_list,
+                        execution_payload_value,
+                    ) = block_contents
                         .ok_or(BlockProductionError::MissingExecutionPayload)?
                         .deconstruct();
 
-                (
-                    BeaconBlock::Electra(BeaconBlockElectra {
-                        slot,
-                        proposer_index,
-                        parent_root,
-                        state_root: Hash256::zero(),
-                        body: BeaconBlockBodyElectra {
-                            randao_reveal,
-                            eth1_data,
-                            graffiti,
-                            proposer_slashings: proposer_slashings.into(),
-                            attester_slashings: attester_slashings.into(),
-                            attestations: attestations.into(),
-                            deposits: deposits.into(),
-                            voluntary_exits: voluntary_exits.into(),
-                            sync_aggregate: sync_aggregate
-                                .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: payload
-                                .try_into()
-                                .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
-                            bls_to_execution_changes: bls_to_execution_changes.into(),
-                            blob_kzg_commitments: kzg_commitments
-                                .ok_or(BlockProductionError::InvalidPayloadFork)?,
-                        },
-                    }),
-                    maybe_blobs_and_proofs,
-                    inclusion_list,
-                    execution_payload_value,
-                )
-            }
-        };
+                    (
+                        BeaconBlock::Electra(BeaconBlockElectra {
+                            slot,
+                            proposer_index,
+                            parent_root,
+                            state_root: Hash256::zero(),
+                            body: BeaconBlockBodyElectra {
+                                randao_reveal,
+                                eth1_data,
+                                graffiti,
+                                proposer_slashings: proposer_slashings.into(),
+                                attester_slashings: attester_slashings.into(),
+                                attestations: attestations.into(),
+                                deposits: deposits.into(),
+                                voluntary_exits: voluntary_exits.into(),
+                                sync_aggregate: sync_aggregate
+                                    .ok_or(BlockProductionError::MissingSyncAggregate)?,
+                                execution_payload: payload
+                                    .try_into()
+                                    .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
+                                bls_to_execution_changes: bls_to_execution_changes.into(),
+                                blob_kzg_commitments: kzg_commitments
+                                    .ok_or(BlockProductionError::InvalidPayloadFork)?,
+                            },
+                        }),
+                        maybe_blobs_and_proofs,
+                        inclusion_list,
+                        execution_payload_value,
+                    )
+                }
+            };
 
         let block = SignedBeaconBlock::from_block(
             inner_block,

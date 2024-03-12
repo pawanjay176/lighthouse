@@ -30,7 +30,13 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use tokio::sync::mpsc;
-use types::{Attestation, AttesterSlashing, BlobSidecar, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock, SignedBlsToExecutionChange, SignedContributionAndProof, SignedInclusionList, SignedVoluntaryExit, Slot, SubnetId, SyncCommitteeMessage, SyncSubnetId};
+use types::{
+    Attestation, AttesterSlashing, BlobSidecar, EthSpec, Hash256, IndexedAttestation,
+    LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
+    SignedAggregateAndProof, SignedBeaconBlock, SignedBlsToExecutionChange,
+    SignedContributionAndProof, SignedInclusionList, SignedVoluntaryExit, Slot, SubnetId,
+    SyncCommitteeMessage, SyncSubnetId,
+};
 
 use beacon_processor::{
     work_reprocessing_queue::{

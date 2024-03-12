@@ -303,7 +303,9 @@ impl<T: BeaconChainTypes> Router<T> {
                         message_id,
                         peer_id,
                         self.network_globals.client(&peer_id),
-                        Arc::new(SignedBeaconBlock::Electra(block_and_inclusion_list.signed_block)),
+                        Arc::new(SignedBeaconBlock::Electra(
+                            block_and_inclusion_list.signed_block,
+                        )),
                         Some(Arc::new(block_and_inclusion_list.signed_inclusion_list)),
                         timestamp_now(),
                     ),
