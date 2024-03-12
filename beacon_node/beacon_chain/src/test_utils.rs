@@ -948,13 +948,24 @@ where
             &self.spec,
         ));
 
+        // todo(eip7547)
+        // let signed_inclusion_list = Arc::new(block_response.inclusion_list.sign(
+        //     &self.validator_keypairs[proposer_index].sk,
+        //     &block_response.state.fork(),
+        //     block_response.state.genesis_validators_root(),
+        //     &self.spec,
+        // ));
+
         let block_contents: SignedBlockContentsTuple<E> = match *signed_block {
             SignedBeaconBlock::Base(_)
             | SignedBeaconBlock::Altair(_)
             | SignedBeaconBlock::Merge(_)
-            | SignedBeaconBlock::Capella(_) => (signed_block, None),
-            SignedBeaconBlock::Deneb(_) | SignedBeaconBlock::Electra(_) => {
-                (signed_block, block_response.blob_items)
+            | SignedBeaconBlock::Capella(_) => (signed_block, None, None),
+            SignedBeaconBlock::Deneb(_) => {
+                (signed_block, block_response.blob_items, None)
+            }
+            SignedBeaconBlock::Electra(_) => {
+                (signed_block, block_response.blob_items, todo!("todo(eip7547): signed_inclusion_list"))
             }
         };
         (block_contents, pre_state)
@@ -1755,7 +1766,7 @@ where
         assert_ne!(slot, 0, "can't produce a block at slot 0");
         assert!(slot >= state.slot());
 
-        let ((block, blobs), state) = self.make_block_return_pre_state(state, slot).await;
+        let ((block, blobs, inclusion_list), state) = self.make_block_return_pre_state(state, slot).await;
 
         let (mut block, _) = (*block).clone().deconstruct();
 
@@ -1769,7 +1780,7 @@ where
             state.genesis_validators_root(),
             &self.spec,
         );
-        ((Arc::new(signed_block), blobs), state)
+        ((Arc::new(signed_block), blobs, inclusion_list), state)
     }
 
     pub async fn make_blob_with_modifier(
@@ -1781,7 +1792,7 @@ where
         assert_ne!(slot, 0, "can't produce a block at slot 0");
         assert!(slot >= state.slot());
 
-        let ((block, mut blobs), state) = self.make_block_return_pre_state(state, slot).await;
+        let ((block, mut blobs, inclusion_list), state) = self.make_block_return_pre_state(state, slot).await;
 
         let (block, _) = (*block).clone().deconstruct();
 
@@ -1795,7 +1806,7 @@ where
             state.genesis_validators_root(),
             &self.spec,
         );
-        ((Arc::new(signed_block), blobs), state)
+        ((Arc::new(signed_block), blobs, inclusion_list), state)
     }
 
     pub fn make_deposits<'a>(
@@ -1903,7 +1914,7 @@ where
         &self,
         block_contents: SignedBlockContentsTuple<E>,
     ) -> Result<SignedBeaconBlockHash, BlockError<E>> {
-        let (block, blob_items) = block_contents;
+        let (block, blob_items, _inclusion_list) = block_contents;
 
         let sidecars = blob_items
             .map(|(proofs, blobs)| BlobSidecar::build_sidecars(blobs, &block, proofs))

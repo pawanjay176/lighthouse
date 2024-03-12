@@ -439,11 +439,11 @@ impl<T: SlotClock + 'static, E: EthSpec> BlockService<T, E> {
 
         let res = match unsigned_block {
             UnsignedBlock::Full(block_contents) => {
-                let (block, maybe_blobs) = block_contents.deconstruct();
+                let (block, maybe_blobs, inclusion_list) = block_contents.deconstruct();
                 self.validator_store
                     .sign_block(*validator_pubkey, block, slot)
                     .await
-                    .map(|b| SignedBlock::Full(PublishBlockRequest::new(Arc::new(b), maybe_blobs)))
+                    .map(|b| SignedBlock::Full(PublishBlockRequest::new(Arc::new(b), maybe_blobs, todo!("todo(eip7547): sign IL"))))
             }
             UnsignedBlock::Blinded(block) => self
                 .validator_store
@@ -878,7 +878,6 @@ impl<T: SlotClock + 'static, E: EthSpec> BlockService<T, E> {
     }
 }
 
-#[allow(clippy::large_enum_variant)] // TODO(eip7547): The straw that broke the camel's back?
 pub enum UnsignedBlock<E: EthSpec> {
     Full(FullBlockContents<E>),
     Blinded(BlindedBeaconBlock<E>),

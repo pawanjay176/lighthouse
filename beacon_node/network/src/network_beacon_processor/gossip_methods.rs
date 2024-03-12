@@ -875,7 +875,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         let verification_result = self
             .chain
             .clone()
-            .verify_block_for_gossip(block.clone())
+            .verify_block_for_gossip(block.clone(), inclusion_list)
             .await;
 
         let block_root = if let Ok(verified_block) = &verification_result {

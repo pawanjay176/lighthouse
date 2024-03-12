@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use types::beacon_block_body::KzgCommitments;
 pub use types::*;
+use types::signed_inclusion_list::InclusionList;
 
 #[cfg(feature = "lighthouse")]
 use crate::lighthouse::BlockReward;
@@ -1526,28 +1527,30 @@ mod tests {
 #[serde(untagged)]
 #[serde(bound = "E: EthSpec")]
 #[ssz(enum_behaviour = "transparent")]
-#[allow(clippy::large_enum_variant)] // TODO(eip7547): The straw that broke the camel's back?
 pub enum ProduceBlockV3Response<E: EthSpec> {
     Full(FullBlockContents<E>),
-    Blinded(BlindedBeaconBlock<E>),
+    Blinded(BlindedBeaconBlock<E>), // todo(7457): i guess add IL here as the whole idea is to produce ILs even when using MEV?
 }
 
 pub type JsonProduceBlockV3Response<E> =
     ForkVersionedResponse<ProduceBlockV3Response<E>, ProduceBlockV3Metadata>;
 
-/// A wrapper over a [`BeaconBlock`] or a [`BlockContents`].
+/// A wrapper over a [`BeaconBlock`] or a [`BlockContentsDeneb`].
 #[derive(Debug, Encode, Serialize, Deserialize)]
 #[serde(untagged)]
 #[serde(bound = "T: EthSpec")]
 #[ssz(enum_behaviour = "transparent")]
+// todo(eip7547): superstruct
 pub enum FullBlockContents<T: EthSpec> {
+    /// This is a full deneb variant with block and blobs and inclusion list.
+    BlockContentsElectra(BlockContentsElectra<T>),
     /// This is a full deneb variant with block and blobs.
-    BlockContents(BlockContents<T>),
+    BlockContentsDeneb(BlockContentsDeneb<T>),
     /// This variant is for all pre-deneb full blocks.
     Block(BeaconBlock<T>),
 }
 
-pub type BlockContentsTuple<T> = (BeaconBlock<T>, Option<(KzgProofs<T>, BlobsList<T>)>);
+pub type BlockContentsTuple<T> = (BeaconBlock<T>, Option<(KzgProofs<T>, BlobsList<T>)>, Option<InclusionList<T>>);
 
 // This value should never be used
 fn dummy_consensus_version() -> ForkName {
@@ -1574,7 +1577,7 @@ pub struct ProduceBlockV3Metadata {
 impl<T: EthSpec> FullBlockContents<T> {
     pub fn new(block: BeaconBlock<T>, blob_data: Option<(KzgProofs<T>, BlobsList<T>)>) -> Self {
         match blob_data {
-            Some((kzg_proofs, blobs)) => Self::BlockContents(BlockContents {
+            Some((kzg_proofs, blobs)) => Self::BlockContentsDeneb(BlockContentsDeneb {
                 block,
                 kzg_proofs,
                 blobs,
@@ -1628,18 +1631,25 @@ impl<T: EthSpec> FullBlockContents<T> {
 
     pub fn block(&self) -> &BeaconBlock<T> {
         match self {
-            FullBlockContents::BlockContents(block_and_sidecars) => &block_and_sidecars.block,
+            FullBlockContents::BlockContentsElectra(block_and_sidecars_and_il) => &block_and_sidecars_and_il.block,
+            FullBlockContents::BlockContentsDeneb(block_and_sidecars) => &block_and_sidecars.block,
             FullBlockContents::Block(block) => block,
         }
     }
 
     pub fn deconstruct(self) -> BlockContentsTuple<T> {
         match self {
-            FullBlockContents::BlockContents(block_and_sidecars) => (
+            FullBlockContents::BlockContentsElectra(block_and_sidecars_and_il) => (
+                block_and_sidecars_and_il.block,
+                Some((block_and_sidecars_and_il.kzg_proofs, block_and_sidecars_and_il.blobs)),
+                Some(block_and_sidecars_and_il.inclusion_list),
+            ),
+            FullBlockContents::BlockContentsDeneb(block_and_sidecars) => (
                 block_and_sidecars.block,
                 Some((block_and_sidecars.kzg_proofs, block_and_sidecars.blobs)),
+                None,
             ),
-            FullBlockContents::Block(block) => (block, None),
+            FullBlockContents::Block(block) => (block, None, None),
         }
     }
 
@@ -1651,7 +1661,7 @@ impl<T: EthSpec> FullBlockContents<T> {
         genesis_validators_root: Hash256,
         spec: &ChainSpec,
     ) -> PublishBlockRequest<T> {
-        let (block, maybe_blobs) = self.deconstruct();
+        let (block, maybe_blobs, maybe_inclusion_list) = self.deconstruct();
         let signed_block = block.sign(secret_key, fork, genesis_validators_root, spec);
         PublishBlockRequest::new(Arc::new(signed_block), maybe_blobs, None) // TODO(eip7547)
     }
@@ -1668,8 +1678,8 @@ impl<T: EthSpec> ForkVersionDeserialize for FullBlockContents<T> {
                     BeaconBlock::deserialize_by_fork::<'de, D>(value, fork_name)?,
                 ))
             }
-            ForkName::Deneb | ForkName::Electra => Ok(FullBlockContents::BlockContents(
-                BlockContents::deserialize_by_fork::<'de, D>(value, fork_name)?,
+            ForkName::Deneb | ForkName::Electra => Ok(FullBlockContents::BlockContentsDeneb(
+                BlockContentsDeneb::deserialize_by_fork::<'de, D>(value, fork_name)?,
             )),
         }
     }
@@ -1678,7 +1688,8 @@ impl<T: EthSpec> ForkVersionDeserialize for FullBlockContents<T> {
 impl<T: EthSpec> Into<BeaconBlock<T>> for FullBlockContents<T> {
     fn into(self) -> BeaconBlock<T> {
         match self {
-            Self::BlockContents(block_and_sidecars) => block_and_sidecars.block,
+            Self::BlockContentsElectra(block_and_sidecars_and_il) => block_and_sidecars_and_il.block,
+            Self::BlockContentsDeneb(block_and_sidecars) => block_and_sidecars.block,
             Self::Block(block) => block,
         }
     }
@@ -1931,14 +1942,24 @@ pub struct SignedBlockContentsElectra<T: EthSpec> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode)]
 #[serde(bound = "T: EthSpec")]
-pub struct BlockContents<T: EthSpec> {
+pub struct BlockContentsDeneb<T: EthSpec> {
     pub block: BeaconBlock<T>,
     pub kzg_proofs: KzgProofs<T>,
     #[serde(with = "ssz_types::serde_utils::list_of_hex_fixed_vec")]
     pub blobs: BlobsList<T>,
 }
 
-impl<T: EthSpec> ForkVersionDeserialize for BlockContents<T> {
+#[derive(Debug, Clone, Serialize, Deserialize, Encode)]
+#[serde(bound = "T: EthSpec")]
+pub struct BlockContentsElectra<T: EthSpec> {
+    pub block: BeaconBlock<T>,
+    pub kzg_proofs: KzgProofs<T>,
+    #[serde(with = "ssz_types::serde_utils::list_of_hex_fixed_vec")]
+    pub blobs: BlobsList<T>,
+    pub inclusion_list: InclusionList<T>,
+}
+
+impl<T: EthSpec> ForkVersionDeserialize for BlockContentsDeneb<T> {
     fn deserialize_by_fork<'de, D: serde::Deserializer<'de>>(
         value: serde_json::value::Value,
         fork_name: ForkName,

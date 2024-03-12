@@ -54,6 +54,7 @@ use types::{
     ExecutionPayloadElectra, ExecutionPayloadMerge, FullPayload, ProposerPreparationData,
     PublicKeyBytes, Signature, Slot,
 };
+use types::signed_inclusion_list::InclusionList;
 
 mod block_hash;
 mod engine_api;
@@ -170,6 +171,7 @@ pub enum BlockProposalContentsType<E: EthSpec> {
     Blinded(BlockProposalContents<E, BlindedPayload<E>>),
 }
 
+// todo(eip7457): another superstruct canidate
 pub enum BlockProposalContents<T: EthSpec, Payload: AbstractExecPayload<T>> {
     Payload {
         payload: Payload,
@@ -181,6 +183,14 @@ pub enum BlockProposalContents<T: EthSpec, Payload: AbstractExecPayload<T>> {
         kzg_commitments: KzgCommitments<T>,
         /// `None` for blinded `PayloadAndBlobs`.
         blobs_and_proofs: Option<(BlobsList<T>, KzgProofs<T>)>,
+    },
+    PayloadAndBlobsAndInclusionList {
+        payload: Payload,
+        block_value: Uint256,
+        kzg_commitments: KzgCommitments<T>,
+        /// `None` for blinded `PayloadAndBlobsAndInclusionList`.
+        blobs_and_proofs: Option<(BlobsList<T>, KzgProofs<T>)>,
+        inclusion_list: Option<InclusionList<T>>,
     },
 }
 
@@ -206,6 +216,19 @@ impl<T: EthSpec> From<BlockProposalContents<T, FullPayload<T>>>
                 block_value,
                 kzg_commitments,
                 blobs_and_proofs: None,
+            },
+            BlockProposalContents::PayloadAndBlobsAndInclusionList {
+                payload,
+                block_value,
+                kzg_commitments,
+                blobs_and_proofs: _,
+                inclusion_list: _,
+            } => BlockProposalContents::PayloadAndBlobsAndInclusionList {
+                payload: payload.execution_payload().into(),
+                block_value,
+                kzg_commitments,
+                blobs_and_proofs: None,
+                inclusion_list: None,
             },
         }
     }
@@ -252,13 +275,14 @@ impl<T: EthSpec, Payload: AbstractExecPayload<T>> BlockProposalContents<T, Paylo
         Payload,
         Option<KzgCommitments<T>>,
         Option<(BlobsList<T>, KzgProofs<T>)>,
+        Option<InclusionList<T>>,
         Uint256,
     ) {
         match self {
             Self::Payload {
                 payload,
                 block_value,
-            } => (payload, None, None, block_value),
+            } => (payload, None, None, None, block_value),
             Self::PayloadAndBlobs {
                 payload,
                 block_value,
@@ -268,6 +292,14 @@ impl<T: EthSpec, Payload: AbstractExecPayload<T>> BlockProposalContents<T, Paylo
                 payload,
                 Some(kzg_commitments),
                 blobs_and_proofs,
+                None,
+                block_value,
+            ),
+            BlockProposalContents::PayloadAndBlobsAndInclusionList { payload, block_value, kzg_commitments, blobs_and_proofs, inclusion_list } => (
+                payload,
+                Some(kzg_commitments),
+                blobs_and_proofs,
+                inclusion_list,
                 block_value,
             ),
         }
@@ -277,18 +309,21 @@ impl<T: EthSpec, Payload: AbstractExecPayload<T>> BlockProposalContents<T, Paylo
         match self {
             Self::Payload { payload, .. } => payload,
             Self::PayloadAndBlobs { payload, .. } => payload,
+            Self::PayloadAndBlobsAndInclusionList { payload, .. } => payload,
         }
     }
     pub fn to_payload(self) -> Payload {
         match self {
             Self::Payload { payload, .. } => payload,
             Self::PayloadAndBlobs { payload, .. } => payload,
+            Self::PayloadAndBlobsAndInclusionList { payload, .. } => payload,
         }
     }
     pub fn block_value(&self) -> &Uint256 {
         match self {
             Self::Payload { block_value, .. } => block_value,
             Self::PayloadAndBlobs { block_value, .. } => block_value,
+            Self::PayloadAndBlobsAndInclusionList { block_value, .. } => block_value,
         }
     }
 }

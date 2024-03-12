@@ -8,6 +8,7 @@ use ssz_types::VariableList;
 use test_random_derive::TestRandom;
 use tree_hash_derive::TreeHash;
 
+// todo(eip7547): maybe do a proper newtype instead, to be able to offer convenience methods like "sign", analogous to BeaconBlock
 pub type InclusionList<E> = VariableList<
     Transaction<<E as EthSpec>::MaxBytesPerTransaction>,
     <E as EthSpec>::MaxTransactionsPerInclusionList,
