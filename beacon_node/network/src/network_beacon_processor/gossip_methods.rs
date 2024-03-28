@@ -646,7 +646,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     "commitment" => %gossip_verified_blob.kzg_commitment(),
                 );
 
-                self.propagate_validation_result(message_id, peer_id, MessageAcceptance::Accept);
+                self.propagate_validation_result(message_id, peer_id, MessageAcceptance::Ignore);
 
                 // Log metrics to keep track of propagation delay times.
                 if let Some(duration) = SystemTime::now()
