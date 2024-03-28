@@ -1245,8 +1245,9 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                         }
                     }
                     Ok(msg) => {
-                        if let PubsubMessage::BlobSidecar(msg) = msg {
-                            let (index, blob_sidecar) = *msg;
+                        if let PubsubMessage::BlobSidecar(message) = &msg {
+                            let index = message.0;
+                            let blob_sidecar = &message.1;
                             let modified_blob_sidecar = Arc::new(BlobSidecar {
                                 blob: blob_sidecar.blob.clone(),
                                 kzg_commitment: blob_sidecar.kzg_commitment.clone(),
@@ -1261,15 +1262,14 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                                 index,
                                 modified_blob_sidecar,
                             )))]);
-                        } else {
-                            // Notify the network
-                            return Some(NetworkEvent::PubsubMessage {
-                                id,
-                                source: propagation_source,
-                                topic: gs_msg.topic,
-                                message: msg,
-                            });
                         }
+                        // Notify the network
+                        return Some(NetworkEvent::PubsubMessage {
+                            id,
+                            source: propagation_source,
+                            topic: gs_msg.topic,
+                            message: msg,
+                        });
                     }
                 }
             }
