@@ -41,7 +41,8 @@ use std::{
 };
 use types::ForkName;
 use types::{
-    consts::altair::SYNC_COMMITTEE_SUBNET_COUNT, EnrForkId, EthSpec, ForkContext, Slot, SubnetId,
+    consts::altair::SYNC_COMMITTEE_SUBNET_COUNT, BlobSidecar, EnrForkId, EthSpec, ForkContext,
+    Slot, SubnetId,
 };
 use utils::{build_transport, strip_peer_id, Context as ServiceContext, MAX_CONNECTIONS_PER_PEER};
 
@@ -1244,13 +1245,31 @@ impl<AppReqId: ReqId, TSpec: EthSpec> Network<AppReqId, TSpec> {
                         }
                     }
                     Ok(msg) => {
-                        // Notify the network
-                        return Some(NetworkEvent::PubsubMessage {
-                            id,
-                            source: propagation_source,
-                            topic: gs_msg.topic,
-                            message: msg,
-                        });
+                        if let PubsubMessage::BlobSidecar(msg) = msg {
+                            let (index, blob_sidecar) = *msg;
+                            let modified_blob_sidecar = Arc::new(BlobSidecar {
+                                blob: blob_sidecar.blob.clone(),
+                                kzg_commitment: blob_sidecar.kzg_commitment.clone(),
+                                index: index,
+                                kzg_commitment_inclusion_proof: blob_sidecar
+                                    .kzg_commitment_inclusion_proof
+                                    .clone(),
+                                signed_block_header: blob_sidecar.signed_block_header.clone(),
+                                kzg_proof: [0; 48].into(),
+                            });
+                            self.publish(vec![PubsubMessage::BlobSidecar(Box::new((
+                                index,
+                                modified_blob_sidecar,
+                            )))]);
+                        } else {
+                            // Notify the network
+                            return Some(NetworkEvent::PubsubMessage {
+                                id,
+                                source: propagation_source,
+                                topic: gs_msg.topic,
+                                message: msg,
+                            });
+                        }
                     }
                 }
             }
