@@ -3,7 +3,7 @@ use crate::block_verification::BlockError;
 use crate::data_availability_checker::AvailabilityCheckError;
 pub use crate::data_availability_checker::{AvailableBlock, MaybeAvailableBlock};
 use crate::eth1_finalization_cache::Eth1FinalizationData;
-use crate::{get_block_root, GossipVerifiedBlock, PayloadVerificationOutcome};
+use crate::{get_block_root, BeaconChainError, GossipVerifiedBlock, PayloadVerificationOutcome};
 use derivative::Derivative;
 use ssz_types::VariableList;
 use state_processing::ConsensusContext;
@@ -312,36 +312,60 @@ pub struct BlockImportData<E: EthSpec> {
 pub type GossipVerifiedBlockContents<E> =
     (GossipVerifiedBlock<E>, Option<GossipVerifiedBlobList<E>>);
 
+/// An error that unifies block/blob error types.
+/// The objective is to properly attribute block/blob processing errors to
+/// the block component that it originated in.
+///
+/// Without this, we end up including additional error variants in [BlockError] that
+/// don't apply in cases where you process a different blob component.
+///
+/// For e.g. Kzg errors do not stem from block processing, only blobs.
 #[derive(Debug)]
-pub enum BlockContentsError<E: EthSpec> {
+pub enum BlockComponentsError<E: EthSpec> {
     BlockError(BlockError<E>),
     BlobError(GossipBlobError<E>),
     SidecarError(BlobSidecarError),
+    AvailabilityError(AvailabilityCheckError),
 }
 
-impl<E: EthSpec> From<BlockError<E>> for BlockContentsError<E> {
+impl<E: EthSpec> From<BlockError<E>> for BlockComponentsError<E> {
     fn from(value: BlockError<E>) -> Self {
         Self::BlockError(value)
     }
 }
 
-impl<E: EthSpec> From<GossipBlobError<E>> for BlockContentsError<E> {
+impl<E: EthSpec> From<GossipBlobError<E>> for BlockComponentsError<E> {
     fn from(value: GossipBlobError<E>) -> Self {
         Self::BlobError(value)
     }
 }
 
-impl<E: EthSpec> std::fmt::Display for BlockContentsError<E> {
+impl<E: EthSpec> From<AvailabilityCheckError> for BlockComponentsError<E> {
+    fn from(value: AvailabilityCheckError) -> Self {
+        Self::AvailabilityError(value)
+    }
+}
+
+impl<E: EthSpec> From<BeaconChainError> for BlockComponentsError<E> {
+    fn from(value: BeaconChainError) -> Self {
+        Self::BlockError(BlockError::BeaconChainError(value))
+    }
+}
+
+impl<E: EthSpec> std::fmt::Display for BlockComponentsError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockContentsError::BlockError(err) => {
+            BlockComponentsError::BlockError(err) => {
                 write!(f, "BlockError({})", err)
             }
-            BlockContentsError::BlobError(err) => {
+            BlockComponentsError::BlobError(err) => {
                 write!(f, "BlobError({})", err)
             }
-            BlockContentsError::SidecarError(err) => {
+            BlockComponentsError::SidecarError(err) => {
                 write!(f, "SidecarError({:?})", err)
+            }
+            BlockComponentsError::AvailabilityError(err) => {
+                write!(f, "AvailabilityError({:?})", err)
             }
         }
     }

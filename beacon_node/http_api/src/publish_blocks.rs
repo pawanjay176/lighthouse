@@ -1,6 +1,6 @@
 use crate::metrics;
 
-use beacon_chain::block_verification_types::{AsBlock, BlockContentsError};
+use beacon_chain::block_verification_types::{AsBlock, BlockComponentsError};
 use beacon_chain::validator_monitor::{get_block_delay_ms, timestamp_now};
 use beacon_chain::{
     AvailabilityProcessingStatus, BeaconChain, BeaconChainError, BeaconChainTypes, BlockError,
@@ -113,8 +113,8 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlockConten
     let (gossip_verified_block, gossip_verified_blobs) =
         match block_contents.into_gossip_verified_block(&chain) {
             Ok(b) => b,
-            Err(BlockContentsError::BlockError(BlockError::BlockIsAlreadyKnown(_)))
-            | Err(BlockContentsError::BlobError(
+            Err(BlockComponentsError::BlockError(BlockError::BlockIsAlreadyKnown(_)))
+            | Err(BlockComponentsError::BlobError(
                 beacon_chain::blob_verification::GossipBlobError::RepeatBlob { .. },
             )) => {
                 // Allow the status code for duplicate blocks to be overridden based on config.

@@ -9,12 +9,12 @@ use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_verification::{GossipBlobError, GossipVerifiedBlob};
 use crate::block_times_cache::BlockTimesCache;
-use crate::block_verification::POS_PANDA_BANNER;
 use crate::block_verification::{
     check_block_is_finalized_checkpoint_or_descendant, check_block_relevancy,
     signature_verify_chain_segment, verify_header_signature, BlockError, ExecutionPendingBlock,
     GossipVerifiedBlock, IntoExecutionPendingBlock,
 };
+use crate::block_verification::{BlockComponentsError, POS_PANDA_BANNER};
 use crate::block_verification_types::{
     AsBlock, AvailableExecutedBlock, BlockImportData, ExecutedBlock, RpcBlock,
 };
@@ -220,7 +220,7 @@ pub enum ChainSegmentResult<E: EthSpec> {
     /// have been imported.
     Failed {
         imported_blocks: usize,
-        error: BlockError<E>,
+        error: BlockComponentsError<E>,
     },
 }
 
@@ -2602,7 +2602,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             if let Err(e) = block.as_block().fork_name(&self.spec) {
                 return Err(ChainSegmentResult::Failed {
                     imported_blocks,
-                    error: BlockError::InconsistentFork(e),
+                    error: BlockError::InconsistentFork(e).into(),
                 });
             }
 
@@ -2617,7 +2617,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 if block_root != *child_parent_root {
                     return Err(ChainSegmentResult::Failed {
                         imported_blocks,
-                        error: BlockError::NonLinearParentRoots,
+                        error: BlockError::NonLinearParentRoots.into(),
                     });
                 }
 
@@ -2625,7 +2625,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 if *child_slot <= block.slot() {
                     return Err(ChainSegmentResult::Failed {
                         imported_blocks,
-                        error: BlockError::NonLinearSlots,
+                        error: BlockError::NonLinearSlots.into(),
                     });
                 }
             }
@@ -2656,7 +2656,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 Err(BlockError::NotFinalizedDescendant { block_parent_root }) => {
                     return Err(ChainSegmentResult::Failed {
                         imported_blocks,
-                        error: BlockError::NotFinalizedDescendant { block_parent_root },
+                        error: BlockError::NotFinalizedDescendant { block_parent_root }.into(),
                     });
                 }
                 // If there was an error whilst determining if the block was invalid, return that
@@ -2664,7 +2664,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 Err(BlockError::BeaconChainError(e)) => {
                     return Err(ChainSegmentResult::Failed {
                         imported_blocks,
-                        error: BlockError::BeaconChainError(e),
+                        error: BlockError::BeaconChainError(e).into(),
                     });
                 }
                 // If the block was decided to be irrelevant for any other reason, don't include
@@ -2705,7 +2705,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             Err(error) => {
                 return ChainSegmentResult::Failed {
                     imported_blocks,
-                    error: BlockError::BeaconChainError(error),
+                    error: BlockError::BeaconChainError(error).into(),
                 }
             }
         };
@@ -2738,13 +2738,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 Ok(Err(error)) => {
                     return ChainSegmentResult::Failed {
                         imported_blocks,
-                        error,
+                        error: BlockComponentsError::BlockError(error),
                     };
                 }
                 Err(error) => {
                     return ChainSegmentResult::Failed {
                         imported_blocks,
-                        error: BlockError::BeaconChainError(error),
+                        error: BlockError::BeaconChainError(error).into(),
                     };
                 }
             };
@@ -2771,14 +2771,18 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                                     "block_root" => ?block_root, "slot" => slot);
                                 return ChainSegmentResult::Failed {
                                     imported_blocks,
+                                    // TODO(pawan): this shouldn't be a block error
                                     error: BlockError::AvailabilityCheck(
                                         AvailabilityCheckError::MissingBlobs,
-                                    ),
+                                    )
+                                    .into(),
                                 };
                             }
                         }
                     }
-                    Err(BlockError::BlockIsAlreadyKnown(block_root)) => {
+                    Err(BlockComponentsError::BlockError(BlockError::BlockIsAlreadyKnown(
+                        block_root,
+                    ))) => {
                         debug!(self.log,
                             "Ignoring already known blocks while processing chain segment";
                             "block_root" => ?block_root);
@@ -2858,7 +2862,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub async fn process_gossip_blob(
         self: &Arc<Self>,
         blob: GossipVerifiedBlob<T>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         let block_root = blob.block_root();
 
         // If this block has already been imported to forkchoice it must have been available, so
@@ -2868,7 +2872,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .fork_choice_read_lock()
             .contains_block(&block_root)
         {
-            return Err(BlockError::BlockIsAlreadyKnown(blob.block_root()));
+            return Err(BlockError::BlockIsAlreadyKnown(blob.block_root()).into());
         }
 
         if let Some(event_handler) = self.event_handler.as_ref() {
@@ -2890,7 +2894,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         slot: Slot,
         block_root: Hash256,
         blobs: FixedBlobSidecarList<T::EthSpec>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         // If this block has already been imported to forkchoice it must have been available, so
         // we don't need to process its blobs again.
         if self
@@ -2898,7 +2902,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .fork_choice_read_lock()
             .contains_block(&block_root)
         {
-            return Err(BlockError::BlockIsAlreadyKnown(block_root));
+            return Err(BlockError::BlockIsAlreadyKnown(block_root).into());
         }
 
         if let Some(event_handler) = self.event_handler.as_ref() {
@@ -2922,8 +2926,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     fn remove_notified(
         &self,
         block_root: &Hash256,
-        r: Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+        r: Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>>,
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         let has_missing_components =
             matches!(r, Ok(AvailabilityProcessingStatus::MissingComponents(_, _)));
         if !has_missing_components {
@@ -2939,7 +2943,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         block_root: Hash256,
         unverified_block: B,
         notify_execution_layer: NotifyExecutionLayer,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         self.reqresp_pre_import_cache
             .write()
             .insert(block_root, unverified_block.block_cloned());
@@ -2971,7 +2975,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         unverified_block: B,
         notify_execution_layer: NotifyExecutionLayer,
         publish_fn: impl FnOnce() -> Result<(), BlockError<T::EthSpec>> + Send + 'static,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         // Start the Prometheus timer.
         let _full_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_TIMES);
 
@@ -3047,7 +3051,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
                 Ok(status)
             }
-            Err(e @ BlockError::BeaconChainError(BeaconChainError::TokioJoin(_))) => {
+            Err(
+                e @ BlockComponentsError::BlockError(BlockError::BeaconChainError(
+                    BeaconChainError::TokioJoin(_),
+                )),
+            ) => {
                 debug!(
                     self.log,
                     "Beacon block processing cancelled";
@@ -3057,13 +3065,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             }
             // There was an error whilst attempting to verify and import the block. The block might
             // be partially verified or partially imported.
-            Err(BlockError::BeaconChainError(e)) => {
+            Err(BlockComponentsError::BlockError(BlockError::BeaconChainError(e))) => {
                 crit!(
                     self.log,
                     "Beacon block processing error";
                     "error" => ?e,
                 );
-                Err(BlockError::BeaconChainError(e))
+                Err(BlockError::BeaconChainError(e).into())
             }
             // The block failed verification.
             Err(other) => {
@@ -3139,7 +3147,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     async fn check_block_availability_and_import(
         self: &Arc<Self>,
         block: AvailabilityPendingExecutedBlock<T::EthSpec>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         let slot = block.block.slot();
         let availability = self
             .data_availability_checker
@@ -3152,7 +3160,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     async fn check_gossip_blob_availability_and_import(
         self: &Arc<Self>,
         blob: GossipVerifiedBlob<T>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         let slot = blob.slot();
         if let Some(slasher) = self.slasher.as_ref() {
             slasher.accept_block_header(blob.signed_block_header());
@@ -3169,7 +3177,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         slot: Slot,
         block_root: Hash256,
         blobs: FixedBlobSidecarList<T::EthSpec>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         // Need to scope this to ensure the lock is dropped before calling `process_availability`
         // Even an explicit drop is not enough to convince the borrow checker.
         {
@@ -3208,7 +3216,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         self: &Arc<Self>,
         slot: Slot,
         availability: Availability<T::EthSpec>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         match availability {
             Availability::Available(block) => {
                 // Block is fully available, import into fork choice
@@ -3223,7 +3231,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub async fn import_available_block(
         self: &Arc<Self>,
         block: Box<AvailableExecutedBlock<T::EthSpec>>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError<T::EthSpec>> {
+    ) -> Result<AvailabilityProcessingStatus, BlockComponentsError<T::EthSpec>> {
         let AvailableExecutedBlock {
             block,
             import_data,
@@ -3286,7 +3294,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         parent_block: SignedBlindedBeaconBlock<T::EthSpec>,
         parent_eth1_finalization_data: Eth1FinalizationData,
         mut consensus_context: ConsensusContext<T::EthSpec>,
-    ) -> Result<Hash256, BlockError<T::EthSpec>> {
+    ) -> Result<Hash256, BlockComponentsError<T::EthSpec>> {
         // ----------------------------- BLOCK NOT YET ATTESTABLE ----------------------------------
         // Everything in this initial section is on the hot path between processing the block and
         // being able to attest to it. DO NOT add any extra processing in this initial section
@@ -3503,10 +3511,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     "error" => ?e,
                     "warning" => "The database is likely corrupt now, consider --purge-db"
                 );
-                return Err(BlockError::BeaconChainError(e));
+                return Err(BeaconChainError::from(e).into());
             }
 
-            return Err(e.into());
+            return Err(BeaconChainError::from(e).into());
         }
         drop(txn_lock);
 
@@ -6655,7 +6663,7 @@ impl From<BeaconStateError> for Error {
 }
 
 impl<E: EthSpec> ChainSegmentResult<E> {
-    pub fn into_block_error(self) -> Result<(), BlockError<E>> {
+    pub fn into_block_components_error(self) -> Result<(), BlockComponentsError<E>> {
         match self {
             ChainSegmentResult::Failed { error, .. } => Err(error),
             ChainSegmentResult::Successful { .. } => Ok(()),
