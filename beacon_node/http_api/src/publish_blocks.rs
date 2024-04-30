@@ -261,15 +261,18 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlockConten
                 Err(warp_utils::reject::custom_bad_request(msg))
             }
         }
-        Err(BlockError::BeaconChainError(BeaconChainError::UnableToPublish)) => {
-            Err(warp_utils::reject::custom_server_error(
-                "unable to publish to network channel".to_string(),
+        Err(BlockComponentsError::BlockError(BlockError::BeaconChainError(
+            BeaconChainError::UnableToPublish,
+        ))) => Err(warp_utils::reject::custom_server_error(
+            "unable to publish to network channel".to_string(),
+        )),
+        Err(BlockComponentsError::BlockError(BlockError::Slashable)) => {
+            Err(warp_utils::reject::custom_bad_request(
+                "proposal for this slot and proposer has already been seen".to_string(),
             ))
         }
-        Err(BlockError::Slashable) => Err(warp_utils::reject::custom_bad_request(
-            "proposal for this slot and proposer has already been seen".to_string(),
-        )),
         Err(e) => {
+            todo!("TODO: pawan");
             if let BroadcastValidation::Gossip = validation_level {
                 Err(warp_utils::reject::broadcast_without_import(format!("{e}")))
             } else {

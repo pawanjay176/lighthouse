@@ -9,7 +9,7 @@ use crate::sync::block_lookups::common::LookupType;
 use crate::sync::block_lookups::parent_lookup::{ParentLookup, RequestError};
 use crate::sync::block_lookups::single_block_lookup::{CachedChild, LookupRequestError};
 use crate::sync::manager::{Id, SingleLookupReqId};
-use beacon_chain::block_verification_types::{AsBlock, RpcBlock};
+use beacon_chain::block_verification_types::{AsBlock, BlockComponentsError, RpcBlock};
 pub use beacon_chain::data_availability_checker::ChildComponents;
 use beacon_chain::data_availability_checker::{
     AvailabilityCheckErrorCategory, DataAvailabilityChecker,
@@ -747,7 +747,9 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
 
         let action = match result {
             BlockProcessingResult::Ok(AvailabilityProcessingStatus::Imported(_))
-            | BlockProcessingResult::Err(BlockError::BlockIsAlreadyKnown { .. }) => {
+            | BlockProcessingResult::Err(BlockComponentsError::BlockError(
+                BlockError::BlockIsAlreadyKnown { .. },
+            )) => {
                 // Successfully imported
                 trace!(self.log, "Single block processing succeeded"; "block" => %block_root);
                 Action::Drop
@@ -793,7 +795,8 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                 );
                 Action::Drop
             }
-            BlockProcessingResult::Err(e) => {
+            // TODO(pawan): handle more error types
+            BlockProcessingResult::Err(BlockComponentsError::BlockError(e)) => {
                 let root = lookup.block_root();
                 trace!(self.log, "Single block processing failed"; "block" => %root, "error" => %e);
                 match e {
@@ -846,6 +849,10 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                         Action::Retry
                     }
                 }
+            }
+            other => {
+                // TODO(pawan): handle other error types
+                Action::Drop
             }
         };
 
@@ -946,12 +953,16 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                     Err(e) => self.handle_parent_request_error(&mut parent_lookup, cx, e.into()),
                 }
             }
-            BlockProcessingResult::Err(BlockError::ParentUnknown(block)) => {
+            BlockProcessingResult::Err(BlockComponentsError::BlockError(
+                BlockError::ParentUnknown(block),
+            )) => {
                 parent_lookup.add_unknown_parent_block(block);
                 self.request_parent(parent_lookup, cx);
             }
             BlockProcessingResult::Ok(AvailabilityProcessingStatus::Imported(_))
-            | BlockProcessingResult::Err(BlockError::BlockIsAlreadyKnown(_)) => {
+            | BlockProcessingResult::Err(BlockComponentsError::BlockError(
+                BlockError::BlockIsAlreadyKnown(_),
+            )) => {
                 let (chain_hash, blocks, hashes, block_request) =
                     parent_lookup.parts_for_processing();
 
@@ -982,9 +993,9 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                     }
                 }
             }
-            ref e @ BlockProcessingResult::Err(BlockError::ExecutionPayloadError(ref epe))
-                if !epe.penalize_peer() =>
-            {
+            ref e @ BlockProcessingResult::Err(BlockComponentsError::BlockError(
+                BlockError::ExecutionPayloadError(ref epe),
+            )) if !epe.penalize_peer() => {
                 // These errors indicate that the execution layer is offline
                 // and failed to validate the execution payload. Do not downscore peer.
                 debug!(
@@ -1072,7 +1083,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
     /// processing a block + blobs for a parent lookup.
     fn handle_parent_block_error(
         &mut self,
-        outcome: BlockError<<T as BeaconChainTypes>::EthSpec>,
+        outcome: BlockComponentsError<<T as BeaconChainTypes>::EthSpec>,
         cx: &mut SyncNetworkContext<T>,
         mut parent_lookup: ParentLookup<T>,
     ) {

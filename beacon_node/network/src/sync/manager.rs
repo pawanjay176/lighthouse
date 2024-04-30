@@ -44,8 +44,8 @@ use crate::service::NetworkMessage;
 use crate::status::ToStatusMessage;
 use crate::sync::block_lookups::{BlobRequestState, BlockRequestState};
 use crate::sync::block_sidecar_coupling::BlocksAndBlobsRequestInfo;
-use beacon_chain::block_verification_types::AsBlock;
 use beacon_chain::block_verification_types::RpcBlock;
+use beacon_chain::block_verification_types::{AsBlock, BlockComponentsError};
 use beacon_chain::data_availability_checker::ChildComponents;
 use beacon_chain::{
     AvailabilityProcessingStatus, BeaconChain, BeaconChainTypes, BlockError, EngineState,
@@ -159,7 +159,7 @@ pub enum BlockProcessType {
 #[derive(Debug)]
 pub enum BlockProcessingResult<E: EthSpec> {
     Ok(AvailabilityProcessingStatus),
-    Err(BlockError<E>),
+    Err(BlockComponentsError<E>),
     Ignored,
 }
 
@@ -1029,10 +1029,10 @@ impl<T: BeaconChainTypes> SyncManager<T> {
     }
 }
 
-impl<E: EthSpec> From<Result<AvailabilityProcessingStatus, BlockError<E>>>
+impl<E: EthSpec> From<Result<AvailabilityProcessingStatus, BlockComponentsError<E>>>
     for BlockProcessingResult<E>
 {
-    fn from(result: Result<AvailabilityProcessingStatus, BlockError<E>>) -> Self {
+    fn from(result: Result<AvailabilityProcessingStatus, BlockComponentsError<E>>) -> Self {
         match result {
             Ok(status) => BlockProcessingResult::Ok(status),
             Err(e) => BlockProcessingResult::Err(e),
@@ -1040,8 +1040,8 @@ impl<E: EthSpec> From<Result<AvailabilityProcessingStatus, BlockError<E>>>
     }
 }
 
-impl<E: EthSpec> From<BlockError<E>> for BlockProcessingResult<E> {
-    fn from(e: BlockError<E>) -> Self {
+impl<E: EthSpec> From<BlockComponentsError<E>> for BlockProcessingResult<E> {
+    fn from(e: BlockComponentsError<E>) -> Self {
         BlockProcessingResult::Err(e)
     }
 }
