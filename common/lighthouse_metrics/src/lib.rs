@@ -20,8 +20,7 @@
 //! ## Example
 //!
 //! ```rust
-//! #[macro_use]
-//! extern crate lazy_static;
+//! use lazy_static::lazy_static;
 //! use lighthouse_metrics::*;
 //!
 //! // These metrics are "magically" linked to the global registry defined in `lighthouse_metrics`.
@@ -241,16 +240,6 @@ pub fn get_int_counter(
 pub fn inc_counter_vec(int_counter_vec: &Result<IntCounterVec>, name: &[&str]) {
     if let Some(counter) = get_int_counter(int_counter_vec, name) {
         counter.inc()
-    }
-}
-
-/// Sets the `int_counter_vec` with the given `name` to the `amount`,
-/// should only be called with `ammount`s equal or above the current value
-/// as per Prometheus spec, the `counter` type should only go up.
-pub fn set_counter_vec_by(int_counter_vec: &Result<IntCounterVec>, name: &[&str], amount: u64) {
-    if let Some(counter) = get_int_counter(int_counter_vec, name) {
-        counter.reset();
-        counter.inc_by(amount);
     }
 }
 

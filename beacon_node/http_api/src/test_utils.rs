@@ -3,7 +3,9 @@ use beacon_chain::{
     test_utils::{BeaconChainHarness, BoxedMutator, Builder, EphemeralHarnessType},
     BeaconChain, BeaconChainTypes,
 };
-use beacon_processor::{BeaconProcessor, BeaconProcessorChannels, BeaconProcessorConfig};
+use beacon_processor::{
+    BeaconProcessor, BeaconProcessorChannels, BeaconProcessorConfig, BeaconProcessorQueueLengths,
+};
 use directory::DEFAULT_ROOT_DIR;
 use eth2::{BeaconNodeHttpClient, Timeouts};
 use lighthouse_network::{
@@ -35,6 +37,7 @@ pub const EXTERNAL_ADDR: &str = "/ip4/0.0.0.0/tcp/9000";
 
 /// HTTP API tester that allows interaction with the underlying beacon chain harness.
 pub struct InteractiveTester<E: EthSpec> {
+    pub ctx: Arc<Context<EphemeralHarnessType<E>>>,
     pub harness: BeaconChainHarness<EphemeralHarnessType<E>>,
     pub client: BeaconNodeHttpClient,
     pub network_rx: NetworkReceivers<E>,
@@ -44,10 +47,11 @@ pub struct InteractiveTester<E: EthSpec> {
 /// The result of calling `create_api_server`.
 ///
 /// Glue-type between `tests::ApiTester` and `InteractiveTester`.
-pub struct ApiServer<E: EthSpec, SFut: Future<Output = ()>> {
+pub struct ApiServer<T: BeaconChainTypes, SFut: Future<Output = ()>> {
+    pub ctx: Arc<Context<T>>,
     pub server: SFut,
     pub listening_socket: SocketAddr,
-    pub network_rx: NetworkReceivers<E>,
+    pub network_rx: NetworkReceivers<T::EthSpec>,
     pub local_enr: Enr,
     pub external_peer_id: PeerId,
 }
@@ -90,15 +94,13 @@ impl<E: EthSpec> InteractiveTester<E> {
 
         let harness = harness_builder.build();
 
-        let (
-            ApiServer {
-                server,
-                listening_socket,
-                network_rx,
-                ..
-            },
+        let ApiServer {
             ctx,
-        ) = create_api_server(
+            server,
+            listening_socket,
+            network_rx,
+            ..
+        } = create_api_server(
             harness.chain.clone(),
             &harness.runtime,
             harness.logger().clone(),
@@ -118,6 +120,7 @@ impl<E: EthSpec> InteractiveTester<E> {
         );
 
         Self {
+            ctx,
             harness,
             client,
             network_rx,
@@ -130,10 +133,7 @@ pub async fn create_api_server<T: BeaconChainTypes>(
     chain: Arc<BeaconChain<T>>,
     test_runtime: &TestRuntime,
     log: Logger,
-) -> (
-    ApiServer<T::EthSpec, impl Future<Output = ()>>,
-    Arc<Context<T>>,
-) {
+) -> ApiServer<T, impl Future<Output = ()>> {
     // Use port 0 to allocate a new unused port.
     let port = 0;
 
@@ -195,6 +195,7 @@ pub async fn create_api_server<T: BeaconChainTypes>(
     } = BeaconProcessorChannels::new(&beacon_processor_config);
 
     let beacon_processor_send = beacon_processor_tx;
+    let reprocess_send = work_reprocessing_tx.clone();
     BeaconProcessor {
         network_globals: network_globals.clone(),
         executor: test_runtime.task_executor.clone(),
@@ -209,6 +210,11 @@ pub async fn create_api_server<T: BeaconChainTypes>(
         None,
         chain.slot_clock.clone(),
         chain.spec.maximum_gossip_clock_disparity(),
+        BeaconProcessorQueueLengths::from_state(
+            &chain.canonical_head.cached_head().snapshot.beacon_state,
+            &chain.spec,
+        )
+        .unwrap(),
     )
     .unwrap();
 
@@ -224,6 +230,7 @@ pub async fn create_api_server<T: BeaconChainTypes>(
         network_senders: Some(network_senders),
         network_globals: Some(network_globals),
         beacon_processor_send: Some(beacon_processor_send),
+        beacon_processor_reprocess_send: Some(reprocess_send),
         eth1_service: Some(eth1_service),
         sse_logging_components: None,
         log,
@@ -232,14 +239,12 @@ pub async fn create_api_server<T: BeaconChainTypes>(
     let (listening_socket, server) =
         crate::serve(ctx.clone(), test_runtime.task_executor.exit()).unwrap();
 
-    (
-        ApiServer {
-            server,
-            listening_socket,
-            network_rx: network_receivers,
-            local_enr: enr,
-            external_peer_id: peer_id,
-        },
+    ApiServer {
         ctx,
-    )
+        server,
+        listening_socket,
+        network_rx: network_receivers,
+        local_enr: enr,
+        external_peer_id: peer_id,
+    }
 }

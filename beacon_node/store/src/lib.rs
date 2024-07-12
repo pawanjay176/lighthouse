@@ -7,13 +7,11 @@
 //!
 //! Provides a simple API for storing/retrieving all types that sometimes needs type-hints. See
 //! tests for implementation examples.
-#[macro_use]
-extern crate lazy_static;
-
 mod chunk_writer;
 pub mod chunked_iter;
 pub mod chunked_vector;
 pub mod config;
+pub mod consensus_context;
 pub mod errors;
 mod forwards_iter;
 mod garbage_collection;
@@ -25,11 +23,13 @@ pub mod metadata;
 pub mod metrics;
 mod partial_beacon_state;
 pub mod reconstruct;
+pub mod state_cache;
 
 pub mod iter;
 
 pub use self::chunk_writer::ChunkWriter;
 pub use self::config::StoreConfig;
+pub use self::consensus_context::OnDiskConsensusContext;
 pub use self::hot_cold_store::{HotColdDB, HotStateSummary, Split};
 pub use self::leveldb_store::LevelDB;
 pub use self::memory_store::MemoryStore;
@@ -289,7 +289,7 @@ impl DBColumn {
     /// This function returns the number of bytes used by keys in a given column.
     pub fn key_size(self) -> usize {
         match self {
-            Self::OverflowLRUCache => 33, // See `OverflowKey` encode impl.
+            Self::OverflowLRUCache => 33, // DEPRECATED
             Self::BeaconMeta
             | Self::BeaconBlock
             | Self::BeaconState
