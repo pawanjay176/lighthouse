@@ -808,6 +808,9 @@ where
             network_globals: self.network_globals.clone(),
             eth1_service: self.eth1_service.clone(),
             beacon_processor_send: Some(beacon_processor_channels.beacon_processor_tx.clone()),
+            beacon_processor_reprocess_send: Some(
+                beacon_processor_channels.work_reprocessing_tx.clone(),
+            ),
             sse_logging_components: runtime_context.sse_logging_components.clone(),
             log: log.clone(),
         });
@@ -851,9 +854,7 @@ where
         let log_axum = log.clone();
         let exit = runtime_context.executor.exit();
         let axum_http_api_task = async move {
-            http_api::serve_axum_server(ctx, exit)
-                .await
-                .unwrap();
+            http_api::serve_axum_server(ctx, exit).await.unwrap();
             debug!(log_axum, "Axum server task ended");
         };
 

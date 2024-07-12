@@ -41,7 +41,6 @@ pub struct InteractiveTester<E: EthSpec> {
     pub harness: BeaconChainHarness<EphemeralHarnessType<E>>,
     pub client: BeaconNodeHttpClient,
     pub network_rx: NetworkReceivers<E>,
-    pub ctx: Arc<Context<EphemeralHarnessType<E>>>,
 }
 
 /// The result of calling `create_api_server`.
@@ -124,7 +123,6 @@ impl<E: EthSpec> InteractiveTester<E> {
             harness,
             client,
             network_rx,
-            ctx,
         }
     }
 }

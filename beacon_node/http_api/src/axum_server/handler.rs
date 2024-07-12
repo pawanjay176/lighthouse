@@ -261,6 +261,15 @@ pub async fn get_events<T: BeaconChainTypes>(
                     event_handler.subscribe_light_client_optimistic_update()
                 }
                 api_types::EventTopic::BlockReward => event_handler.subscribe_block_reward(),
+                api_types::EventTopic::AttesterSlashing => {
+                    event_handler.subscribe_attester_slashing()
+                }
+                api_types::EventTopic::BlsToExecutionChange => {
+                    event_handler.subscribe_bls_to_execution_change()
+                }
+                api_types::EventTopic::ProposerSlashing => {
+                    event_handler.subscribe_proposer_slashing()
+                }
             };
 
             receivers.push(
@@ -533,8 +542,8 @@ pub async fn post_beacon_pool_attestations<T: BeaconChainTypes>(
                     "Failure verifying attestation for gossip";
                     "error" => ?e,
                     "request_index" => index,
-                    "committee_index" => attestation.data.index,
-                    "attestation_slot" => attestation.data.slot,
+                    "committee_index" => attestation.data().index,
+                    "attestation_slot" => attestation.data().slot,
                 );
                 failures.push(api_types::Failure::new(
                     index,
@@ -559,12 +568,12 @@ pub async fn post_beacon_pool_attestations<T: BeaconChainTypes>(
             &network_tx,
             PubsubMessage::Attestation(Box::new((
                 attestation.subnet_id(),
-                attestation.attestation().clone(),
+                attestation.attestation().clone_as_attestation(),
             ))),
         )?;
 
-        let committee_index = attestation.attestation().data.index;
-        let slot = attestation.attestation().data.slot;
+        let committee_index = attestation.attestation().data().index;
+        let slot = attestation.attestation().data().slot;
 
         if let Err(e) = chain.apply_attestation_to_fork_choice(&attestation) {
             error!(log,
@@ -907,7 +916,7 @@ pub async fn get_validator_attestation_data<T: BeaconChainTypes>(
 
     chain
         .produce_unaggregated_attestation(query.slot, query.committee_index)
-        .map(|attestation| attestation.data)
+        .map(|attestation| attestation.data().clone())
         .map(api_types::GenericResponse::from)
         .map(Json)
         .map_err(warp_utils::reject::beacon_chain_error)
@@ -921,7 +930,10 @@ pub async fn get_validator_aggregate_attestation<T: BeaconChainTypes>(
 ) -> Result<Json<GenericResponse<Attestation<T::EthSpec>>>, HandlerError> {
     let chain = chain_filter(&ctx)?;
     chain
-        .get_aggregated_attestation_by_slot_and_root(query.slot, &query.attestation_data_root)
+        .get_pre_electra_aggregated_attestation_by_slot_and_root(
+            query.slot,
+            &query.attestation_data_root,
+        )
         .map_err(|e| {
             warp_utils::reject::custom_bad_request(format!("unable to fetch aggregate: {:?}", e))
         })?
@@ -990,9 +1002,9 @@ pub async fn post_validator_aggregate_and_proofs<T: BeaconChainTypes>(
                     "Failure verifying aggregate and proofs";
                     "error" => format!("{:?}", e),
                     "request_index" => index,
-                    "aggregator_index" => aggregate.message.aggregator_index,
-                    "attestation_index" => aggregate.message.aggregate.data.index,
-                    "attestation_slot" => aggregate.message.aggregate.data.slot,
+                    "aggregator_index" => aggregate.message().aggregator_index(),
+                    "attestation_index" => aggregate.message().aggregate().data().index,
+                    "attestation_slot" => aggregate.message().aggregate().data().slot,
                 );
                 failures.push(api_types::Failure::new(
                     index,
@@ -1014,9 +1026,9 @@ pub async fn post_validator_aggregate_and_proofs<T: BeaconChainTypes>(
                 "Failure applying verified aggregate attestation to fork choice";
                 "error" => format!("{:?}", e),
                 "request_index" => index,
-                "aggregator_index" => verified_aggregate.aggregate().message.aggregator_index,
-                "attestation_index" => verified_aggregate.attestation().data.index,
-                "attestation_slot" => verified_aggregate.attestation().data.slot,
+                "aggregator_index" => verified_aggregate.aggregate().message().aggregator_index(),
+                "attestation_index" => verified_aggregate.attestation().data().index,
+                "attestation_slot" => verified_aggregate.attestation().data().slot,
             );
             failures.push(api_types::Failure::new(
                 index,
@@ -1053,34 +1065,33 @@ pub async fn post_validator_beacon_committee_subscriptions<T: BeaconChainTypes>(
     let log = ctx.log.clone();
     let validator_subscription_tx = validator_subscription_tx(&ctx)?;
 
-    for subscription in &subscriptions {
-        chain
-            .validator_monitor
-            .write()
-            .auto_register_local_validator(subscription.validator_index);
+    let subscriptions: std::collections::BTreeSet<_> = subscriptions
+        .iter()
+        .map(|subscription| {
+            chain
+                .validator_monitor
+                .write()
+                .auto_register_local_validator(subscription.validator_index);
+            api_types::ValidatorSubscription {
+                attestation_committee_index: subscription.committee_index,
+                slot: subscription.slot,
+                committee_count_at_slot: subscription.committees_at_slot,
+                is_aggregator: subscription.is_aggregator,
+            }
+        })
+        .collect();
 
-        let validator_subscription = api_types::ValidatorSubscription {
-            validator_index: subscription.validator_index,
-            attestation_committee_index: subscription.committee_index,
-            slot: subscription.slot,
-            committee_count_at_slot: subscription.committees_at_slot,
-            is_aggregator: subscription.is_aggregator,
-        };
-
-        let message = ValidatorSubscriptionMessage::AttestationSubscribe {
-            subscriptions: vec![validator_subscription],
-        };
-        if let Err(e) = validator_subscription_tx.try_send(message) {
-            warn!(
-                log,
-                "Unable to process committee subscriptions";
-                "info" => "the host may be overloaded or resource-constrained",
-                "error" => ?e,
-            );
-            return Err(HandlerError::Warp(warp_utils::reject::custom_server_error(
-                "unable to queue subscription, host may be overloaded or shutting down".to_string(),
-            )));
-        }
+    let message = ValidatorSubscriptionMessage::AttestationSubscribe { subscriptions };
+    if let Err(e) = validator_subscription_tx.try_send(message) {
+        warn!(
+            log,
+            "Unable to process committee subscriptions";
+            "info" => "the host may be overloaded or resource-constrained",
+            "error" => ?e,
+        );
+        return Err(HandlerError::Warp(warp_utils::reject::custom_server_error(
+            "unable to queue subscription, host may be overloaded or shutting down".to_string(),
+        )));
     }
 
     Ok(())
