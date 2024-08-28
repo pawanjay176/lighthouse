@@ -170,7 +170,7 @@ impl<E: EthSpec> RpcBlock<E> {
         let inner = if !custody_columns.is_empty() {
             RpcBlockInner::BlockAndCustodyColumns(
                 block,
-                RuntimeVariableList::new(custody_columns, spec.number_of_columns)?,
+                RuntimeVariableList::new(custody_columns, spec.number_of_columns as usize)?,
             )
         } else {
             RpcBlockInner::Block(block)
@@ -614,7 +614,7 @@ impl<E: EthSpec> AsBlock<E> for AvailableBlock<E> {
                         // columns.
                         .map(|d| CustodyDataColumn::from_asserted_custody(d))
                         .collect(),
-                    number_of_columns,
+                    number_of_columns as usize,
                 )
                 .expect("data column list is within bounds"),
             ),

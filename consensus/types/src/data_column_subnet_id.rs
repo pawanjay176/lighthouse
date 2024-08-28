@@ -30,7 +30,7 @@ impl DataColumnSubnetId {
     #[allow(clippy::arithmetic_side_effects)]
     pub fn columns<E: EthSpec>(&self, spec: &ChainSpec) -> impl Iterator<Item = ColumnIndex> {
         let subnet = self.0;
-        let data_column_sidecar_subnet = spec.data_column_sidecar_subnet_count;
+        let data_column_sidecar_subnet = spec.data_column_sidecar_subnet_count as u64;
         let columns_per_subnet = spec.data_columns_per_subnet() as u64;
         (0..columns_per_subnet).map(move |i| data_column_sidecar_subnet * i + subnet)
     }
@@ -55,7 +55,7 @@ impl DataColumnSubnetId {
                 .try_into()
                 .expect("hash_fixed produces a 32 byte array");
             let hash_prefix_u64 = u64::from_le_bytes(hash_prefix);
-            let subnet = hash_prefix_u64 % spec.data_column_sidecar_subnet_count;
+            let subnet = hash_prefix_u64 % spec.data_column_sidecar_subnet_count as u64;
 
             if !subnets.contains(&subnet) {
                 subnets.insert(subnet);

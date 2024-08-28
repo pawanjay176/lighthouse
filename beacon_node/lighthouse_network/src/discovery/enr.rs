@@ -38,7 +38,7 @@ pub trait Eth2Enr {
     ) -> Result<EnrSyncCommitteeBitfield<E>, &'static str>;
 
     /// The peerdas custody subnet count associated with the ENR.
-    fn custody_subnet_count<E: EthSpec>(&self, spec: &ChainSpec) -> u64;
+    fn custody_subnet_count<E: EthSpec>(&self, spec: &ChainSpec) -> u8;
 
     fn eth2(&self) -> Result<EnrForkId, &'static str>;
 }
@@ -66,8 +66,8 @@ impl Eth2Enr for Enr {
 
     /// if the custody value is non-existent in the ENR, then we assume the minimum custody value
     /// defined in the spec.
-    fn custody_subnet_count<E: EthSpec>(&self, spec: &ChainSpec) -> u64 {
-        self.get_decodable::<u64>(PEERDAS_CUSTODY_SUBNET_COUNT_ENR_KEY)
+    fn custody_subnet_count<E: EthSpec>(&self, spec: &ChainSpec) -> u8 {
+        self.get_decodable::<u8>(PEERDAS_CUSTODY_SUBNET_COUNT_ENR_KEY)
             .and_then(|r| r.ok())
             // If value supplied in ENR is invalid, fallback to `custody_requirement`
             .filter(|csc| csc <= &spec.data_column_sidecar_subnet_count)

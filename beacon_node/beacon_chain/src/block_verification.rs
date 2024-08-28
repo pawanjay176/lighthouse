@@ -816,7 +816,7 @@ fn build_gossip_verified_data_columns<T: BeaconChainTypes>(
             }
             let gossip_verified_data_columns = RuntimeVariableList::new(
                 gossip_verified_data_columns,
-                chain.spec.number_of_columns,
+                chain.spec.number_of_columns as usize, 
             )
             .map_err(DataColumnSidecarError::SszError)?;
             Ok::<_, BlockContentsError<T::EthSpec>>(gossip_verified_data_columns)

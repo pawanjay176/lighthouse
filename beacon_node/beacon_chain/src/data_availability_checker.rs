@@ -110,7 +110,7 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
         };
 
         let custody_column_count =
-            custody_subnet_count.saturating_mul(spec.data_columns_per_subnet());
+            custody_subnet_count.saturating_mul(spec.data_columns_per_subnet() as usize);
 
         let inner = DataAvailabilityCheckerInner::new(
             OVERFLOW_LRU_CAPACITY,
@@ -127,9 +127,8 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
     }
 
     pub fn get_custody_columns_count(&self) -> usize {
-        self.availability_cache
-            .custody_subnet_count()
-            .saturating_mul(self.spec.data_columns_per_subnet())
+        (self.availability_cache.custody_subnet_count() as usize)
+            .saturating_mul(self.spec.data_columns_per_subnet() as usize)
     }
 
     /// Checks if the block root is currenlty in the availability cache awaiting import because
@@ -411,7 +410,7 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
             .map(CustodyDataColumn::into_inner)
             .collect::<Vec<_>>();
         let all_data_columns =
-            RuntimeVariableList::from_vec(all_data_columns, self.spec.number_of_columns);
+            RuntimeVariableList::from_vec(all_data_columns, self.spec.number_of_columns as usize);
 
         // verify kzg for all data columns at once
         if !all_data_columns.is_empty() {

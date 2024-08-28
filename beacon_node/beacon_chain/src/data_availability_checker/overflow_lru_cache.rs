@@ -462,7 +462,7 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
             return false;
         };
 
-        let num_of_columns = self.spec.number_of_columns;
+        let num_of_columns = self.spec.number_of_columns as usize;
         let has_missing_columns = pending_components.verified_data_columns.len() < num_of_columns;
 
         has_missing_columns

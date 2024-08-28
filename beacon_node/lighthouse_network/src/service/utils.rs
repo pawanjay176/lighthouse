@@ -169,7 +169,7 @@ pub fn strip_peer_id(addr: &mut Multiaddr) {
 /// Load metadata from persisted file. Return default metadata if loading fails.
 pub fn load_or_build_metadata<E: EthSpec>(
     network_dir: &std::path::Path,
-    custody_subnet_count: Option<u64>,
+    custody_subnet_count: Option<u8>,
     log: &slog::Logger,
 ) -> MetaData<E> {
     // We load a V2 metadata version by default (regardless of current fork)
@@ -243,7 +243,7 @@ pub(crate) fn create_whitelist_filter(
     attestation_subnet_count: u64,
     sync_committee_subnet_count: u64,
     blob_sidecar_subnet_count: u64,
-    data_column_sidecar_subnet_count: u64,
+    data_column_sidecar_subnet_count: u8,
 ) -> gossipsub::WhitelistSubscriptionFilter {
     let mut possible_hashes = HashSet::new();
     for fork_digest in possible_fork_digests {
@@ -272,7 +272,7 @@ pub(crate) fn create_whitelist_filter(
         for id in 0..blob_sidecar_subnet_count {
             add(BlobSidecar(id));
         }
-        for id in 0..data_column_sidecar_subnet_count {
+        for id in 0..data_column_sidecar_subnet_count as u64 {
             add(DataColumnSidecar(DataColumnSubnetId::new(id)));
         }
     }

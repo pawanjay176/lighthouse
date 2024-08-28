@@ -136,7 +136,7 @@ pub struct MetaData<E: EthSpec> {
     #[superstruct(only(V2, V3))]
     pub syncnets: EnrSyncCommitteeBitfield<E>,
     #[superstruct(only(V3))]
-    pub custody_subnet_count: u64,
+    pub custody_subnet_count: u8,
 }
 
 impl<E: EthSpec> MetaData<E> {
@@ -361,7 +361,7 @@ impl DataColumnsByRangeRequest {
         DataColumnsByRangeRequest {
             start_slot: 0,
             count: 0,
-            columns: vec![0; spec.number_of_columns],
+            columns: vec![0; spec.number_of_columns as usize],
         }
         .as_ssz_bytes()
         .len()

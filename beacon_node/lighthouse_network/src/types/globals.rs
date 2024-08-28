@@ -122,7 +122,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
     pub fn custody_columns(&self) -> Vec<ColumnIndex> {
         let enr = self.local_enr();
         let node_id = enr.node_id().raw().into();
-        let custody_subnet_count = enr.custody_subnet_count::<E>(&self.spec);
+        let custody_subnet_count = enr.custody_subnet_count::<E>(&self.spec) as u64;
         DataColumnSubnetId::compute_custody_columns::<E>(node_id, custody_subnet_count, &self.spec)
             .collect()
     }
@@ -131,7 +131,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
     pub fn custody_subnets(&self) -> impl Iterator<Item = DataColumnSubnetId> {
         let enr = self.local_enr();
         let node_id = enr.node_id().raw().into();
-        let custody_subnet_count = enr.custody_subnet_count::<E>(&self.spec);
+        let custody_subnet_count = enr.custody_subnet_count::<E>(&self.spec) as u64;
         DataColumnSubnetId::compute_custody_subnets::<E>(node_id, custody_subnet_count, &self.spec)
     }
 
@@ -186,8 +186,8 @@ mod test {
         let spec = E::default_spec();
         let log = logging::test_logger();
         let default_custody_requirement_column_count = spec.number_of_columns as u64
-            / spec.data_column_sidecar_subnet_count
-            * spec.custody_requirement;
+            / spec.data_column_sidecar_subnet_count as u64
+            * spec.custody_requirement as u64;
         let globals = NetworkGlobals::<E>::new_test_globals(vec![], &log, spec.clone());
         let columns = globals.custody_columns();
         assert_eq!(

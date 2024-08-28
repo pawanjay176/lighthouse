@@ -30,7 +30,7 @@ where
         let sync_committee_bitfield: Result<EnrSyncCommitteeBitfield<E>, _> =
             enr.sync_committee_bitfield::<E>();
 
-        let custody_subnet_count = enr.custody_subnet_count::<E>(&spec_clone);
+        let custody_subnet_count = enr.custody_subnet_count::<E>(&spec_clone) as u64;
 
         let predicate = subnets.iter().any(|subnet| match subnet {
             Subnet::Attestation(s) => attestation_bitfield

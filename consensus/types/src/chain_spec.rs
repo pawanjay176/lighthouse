@@ -195,9 +195,9 @@ pub struct ChainSpec {
      * DAS params
      */
     pub eip7594_fork_epoch: Option<Epoch>,
-    pub custody_requirement: u64,
-    pub data_column_sidecar_subnet_count: u64,
-    pub number_of_columns: usize,
+    pub custody_requirement: u8,
+    pub data_column_sidecar_subnet_count: u8,
+    pub number_of_columns: u8,
 
     /*
      * Networking
@@ -607,9 +607,9 @@ impl ChainSpec {
         }
     }
 
-    pub fn data_columns_per_subnet(&self) -> usize {
+    pub fn data_columns_per_subnet(&self) -> u8 {
         self.number_of_columns
-            .safe_div(self.data_column_sidecar_subnet_count as usize)
+            .safe_div(self.data_column_sidecar_subnet_count)
             .expect("Subnet count must be greater than 0")
     }
 
@@ -1373,14 +1373,14 @@ pub struct Config {
     max_per_epoch_activation_exit_churn_limit: u64,
 
     #[serde(default = "default_custody_requirement")]
-    #[serde(with = "serde_utils::quoted_u64")]
-    custody_requirement: u64,
+    #[serde(with = "serde_utils::quoted_u8")]
+    custody_requirement: u8,
     #[serde(default = "default_data_column_sidecar_subnet_count")]
-    #[serde(with = "serde_utils::quoted_u64")]
-    data_column_sidecar_subnet_count: u64,
+    #[serde(with = "serde_utils::quoted_u8")]
+    data_column_sidecar_subnet_count: u8,
     #[serde(default = "default_number_of_columns")]
-    #[serde(with = "serde_utils::quoted_u64")]
-    number_of_columns: u64,
+    #[serde(with = "serde_utils::quoted_u8")]
+    number_of_columns: u8,
 }
 
 fn default_bellatrix_fork_version() -> [u8; 4] {
@@ -1519,15 +1519,15 @@ const fn default_maximum_gossip_clock_disparity_millis() -> u64 {
     500
 }
 
-const fn default_custody_requirement() -> u64 {
+const fn default_custody_requirement() -> u8 {
     1
 }
 
-const fn default_data_column_sidecar_subnet_count() -> u64 {
+const fn default_data_column_sidecar_subnet_count() -> u8 {
     32
 }
 
-const fn default_number_of_columns() -> u64 {
+const fn default_number_of_columns() -> u8 {
     128
 }
 
@@ -1725,7 +1725,7 @@ impl Config {
 
             custody_requirement: spec.custody_requirement,
             data_column_sidecar_subnet_count: spec.data_column_sidecar_subnet_count,
-            number_of_columns: spec.number_of_columns as u64,
+            number_of_columns: spec.number_of_columns,
         }
     }
 
@@ -1879,7 +1879,7 @@ impl Config {
 
             custody_requirement,
             data_column_sidecar_subnet_count,
-            number_of_columns: number_of_columns as usize,
+            number_of_columns,
 
             ..chain_spec.clone()
         })
