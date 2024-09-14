@@ -13,7 +13,6 @@ use libp2p::swarm::{
 };
 use libp2p::swarm::{ConnectionClosed, FromSwarm, SubstreamProtocol, THandlerInEvent};
 use libp2p::PeerId;
-use parking_lot::Mutex;
 use rate_limiter::{RPCRateLimiter as RateLimiter, RateLimitedErr};
 use slog::{crit, debug, o};
 use std::marker::PhantomData;
@@ -126,8 +125,6 @@ pub struct NetworkParams {
 /// Implements the libp2p `NetworkBehaviour` trait and therefore manages network-level
 /// logic.
 pub struct RPC<Id: ReqId, E: EthSpec> {
-    /// Rate limiter for our responses. This is shared with RPCHandlers.
-    response_limiter: Option<Arc<Mutex<RateLimiter>>>,
     /// Rate limiter for our own requests.
     outbound_request_limiter: Option<SelfRateLimiter<Id, E>>,
     /// Limiter for inbound requests, which restricts more than two requests from running
@@ -144,7 +141,7 @@ pub struct RPC<Id: ReqId, E: EthSpec> {
 
     /// Rate limiter for our responses and the PeerId that this handler interacts with.
     /// The PeerId is necessary since the rate limiter manages rate limiting per peer.
-    response_limiter_new: RateLimiter,
+    response_limiter: Option<RateLimiter>,
 
     /// Responses queued for sending. These responses are stored when the response limiter rejects them.
     delayed_responses: DelayQueue<QueuedResponse<E>>,
@@ -171,20 +168,15 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
 
         let response_limiter = inbound_rate_limiter_config.clone().map(|config| {
             debug!(log, "Using response rate limiting params"; "config" => ?config);
-            Arc::new(Mutex::new(
-                RateLimiter::new_with_config(config.0)
-                    .expect("Inbound limiter configuration parameters are valid"),
-            ))
+            RateLimiter::new_with_config(config.0)
+                .expect("Inbound limiter configuration parameters are valid")
         });
 
         let outbound_request_limiter = outbound_rate_limiter_config.map(|config| {
             SelfRateLimiter::new(config, log.clone()).expect("Configuration parameters are valid")
         });
-        let response_limiter_new =
-            RateLimiter::new_with_config(inbound_rate_limiter_config.as_ref().unwrap().0.clone())
-                .expect("Inbound limiter configuration parameters are valid");
+
         RPC {
-            response_limiter,
             outbound_request_limiter,
             active_inbound_requests_limiter: ActiveRequestsLimiter::new(),
             events: Vec::new(),
@@ -192,7 +184,7 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
             enable_light_client_server,
             log,
             network_params,
-            response_limiter_new,
+            response_limiter,
             delayed_responses: Default::default(),
         }
     }
@@ -204,24 +196,28 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
         peer_id: &PeerId,
         response: &RPCCodedResponse<E>,
     ) -> Result<(), Duration> {
-        match self.response_limiter_new.allows(peer_id, response) {
-            Ok(()) => Ok(()),
-            Err(e) => match e {
-                RateLimitedErr::TooLarge => {
-                    // This should never happen with default parameters. Let's just send the response.
-                    // Log a crit since this is a config issue.
-                    crit!(
-                       self.log,
-                        "Response rate limiting error for a batch that will never fit. Sending response anyway. Check configuration parameters.";
-                        "protocol" => %response.protocol()
-                    );
-                    Ok(())
-                }
-                RateLimitedErr::TooSoon(wait_time) => {
-                    debug!(self.log, "Response rate limiting"; "protocol" => %response.protocol(), "wait_time_ms" => wait_time.as_millis(), "peer_id" => %peer_id);
-                    Err(wait_time)
-                }
-            },
+        if let Some(limiter) = self.response_limiter.as_mut() {
+            match limiter.allows(peer_id, response) {
+                Ok(()) => Ok(()),
+                Err(e) => match e {
+                    RateLimitedErr::TooLarge => {
+                        // This should never happen with default parameters. Let's just send the response.
+                        // Log a crit since this is a config issue.
+                        crit!(
+                           self.log,
+                            "Response rate limiting error for a batch that will never fit. Sending response anyway. Check configuration parameters.";
+                            "protocol" => %response.protocol()
+                        );
+                        Ok(())
+                    }
+                    RateLimitedErr::TooSoon(wait_time) => {
+                        debug!(self.log, "Response rate limiting"; "protocol" => %response.protocol(), "wait_time_ms" => wait_time.as_millis(), "peer_id" => %peer_id);
+                        Err(wait_time)
+                    }
+                },
+            }
+        } else {
+            Ok(())
         }
     }
 
@@ -351,9 +347,6 @@ where
             self.fork_context.clone(),
             &log,
             self.network_params.resp_timeout,
-            self.response_limiter
-                .as_ref()
-                .map(|response_limiter| (peer_id, response_limiter.clone())),
         );
 
         Ok(handler)
@@ -387,9 +380,6 @@ where
             self.fork_context.clone(),
             &log,
             self.network_params.resp_timeout,
-            self.response_limiter
-                .as_ref()
-                .map(|response_limiter| (peer_id, response_limiter.clone())),
         );
 
         Ok(handler)
@@ -524,8 +514,8 @@ where
 
     fn poll(&mut self, cx: &mut Context) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         // let the rate limiter prune.
-        if let Some(response_limiter) = self.response_limiter.as_ref() {
-            let _ = response_limiter.lock().poll_unpin(cx);
+        if let Some(response_limiter) = self.response_limiter.as_mut() {
+            let _ = response_limiter.poll_unpin(cx);
         }
 
         if let Some(self_limiter) = self.outbound_request_limiter.as_mut() {
