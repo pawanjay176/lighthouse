@@ -14,6 +14,7 @@ use futures::channel::mpsc::Sender;
 use futures::future::OptionFuture;
 use futures::prelude::*;
 use futures::StreamExt;
+use lighthouse_network::rpc::Protocol;
 use lighthouse_network::service::Network;
 use lighthouse_network::types::GossipKind;
 use lighthouse_network::{prometheus_client::registry::Registry, MessageAcceptance};
@@ -76,6 +77,7 @@ pub enum NetworkMessage<E: EthSpec> {
         error: RPCResponseErrorCode,
         reason: String,
         id: PeerRequestId,
+        protocol: Protocol,
     },
     /// Publish a list of messages to the gossipsub protocol.
     Publish { messages: Vec<PubsubMessage<E>> },
@@ -631,8 +633,9 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                 error,
                 id,
                 reason,
+                protocol,
             } => {
-                self.libp2p.send_error_response(peer_id, id, error, reason);
+                self.libp2p.send_error_response(peer_id, id, error, reason, protocol);
             }
             NetworkMessage::ValidationResult {
                 propagation_source,

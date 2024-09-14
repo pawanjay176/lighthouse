@@ -194,6 +194,20 @@ pub static TOTAL_SUBNET_QUERIES: LazyLock<Result<IntCounterVec>> = LazyLock::new
     )
 });
 
+pub static RATE_LIMITER_LOCKING_TIME: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram(
+        "rate_limiter_lock",
+        "Time spent on acquiring the rate limiter lock",
+    )
+});
+
+pub static RATE_LIMITER_PROCESSING: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram(
+        "rate_limiter_processing",
+        "Time spent holding the rate limiter lock",
+    )
+});
+
 /*
  * Peer Reporting
  */

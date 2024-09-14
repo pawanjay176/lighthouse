@@ -958,11 +958,12 @@ impl<E: EthSpec> Network<E> {
         id: PeerRequestId,
         error: RPCResponseErrorCode,
         reason: String,
+        protocol: Protocol,
     ) {
         self.eth2_rpc_mut().send_response(
             peer_id,
             id,
-            RPCCodedResponse::Error(error, reason.into()),
+            RPCCodedResponse::Error(error, reason.into(), protocol),
         )
     }
 

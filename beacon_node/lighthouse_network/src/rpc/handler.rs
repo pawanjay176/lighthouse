@@ -5,6 +5,7 @@ use super::methods::{GoodbyeReason, RPCCodedResponse, RPCResponseErrorCode};
 use super::outbound::OutboundRequestContainer;
 use super::protocol::{InboundOutput, InboundRequest, Protocol, RPCError, RPCProtocol};
 use super::{RPCReceived, RPCSend, ReqId};
+use crate::metrics;
 use crate::rpc::outbound::{OutboundFramed, OutboundRequest};
 use crate::rpc::protocol::InboundFramed;
 use crate::rpc::rate_limiter::{RPCRateLimiter, RateLimitedErr};
@@ -320,7 +321,10 @@ where
         response: RPCCodedResponse<E>,
         log: &slog::Logger,
     ) -> Result<(), Duration> {
-        match limiter.lock().allows(peer_id, &(response, protocol)) {
+        let lock_timer = metrics::start_timer(&metrics::RATE_LIMITER_LOCKING_TIME);
+        let mut limiter = limiter.lock();
+        metrics::stop_timer(lock_timer);
+        match limiter.allows(peer_id, &response) {
             Ok(()) => Ok(()),
             Err(e) => match e {
                 RateLimitedErr::TooLarge => {
@@ -417,9 +421,9 @@ where
         log: &slog::Logger,
     ) {
         // If the response we are sending is an error, report back for handling
-        if let RPCCodedResponse::Error(ref code, ref reason) = response {
+        if let RPCCodedResponse::Error(ref code, ref reason, protocol) = response {
             events_out.push(HandlerEvent::Err(HandlerErr::Inbound {
-                error: RPCError::ErrorResponse(*code, reason.to_string()),
+                error: RPCError::ErrorResponse(*code, reason.to_string(), protocol),
                 proto: inbound_info.protocol,
                 id: inbound_id,
             }));
@@ -568,6 +572,7 @@ where
                     info.pending_items.push_back(RPCCodedResponse::Error(
                         RPCResponseErrorCode::ServerError,
                         "Request timed out".into(),
+                        info.protocol,
                     ));
                 }
             }
@@ -840,11 +845,11 @@ where
                             RPCCodedResponse::Success(resp) => {
                                 HandlerEvent::Ok(RPCReceived::Response(id, resp))
                             }
-                            RPCCodedResponse::Error(ref code, ref r) => {
+                            RPCCodedResponse::Error(ref code, ref r, protocol) => {
                                 HandlerEvent::Err(HandlerErr::Outbound {
                                     id,
                                     proto,
-                                    error: RPCError::ErrorResponse(*code, r.to_string()),
+                                    error: RPCError::ErrorResponse(*code, r.to_string(), protocol),
                                 })
                             }
                         };

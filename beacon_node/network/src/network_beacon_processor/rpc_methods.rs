@@ -48,12 +48,14 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         error: RPCResponseErrorCode,
         reason: String,
         id: PeerRequestId,
+        protocol: Protocol,
     ) {
         self.send_network_message(NetworkMessage::SendErrorResponse {
             peer_id,
             error,
             reason,
             id,
+            protocol,
         })
     }
 
@@ -141,6 +143,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 .handle_blocks_by_root_request_inner(peer_id, request_id, request)
                 .await,
             Response::BlocksByRoot,
+            Protocol::BlocksByRoot,
         );
     }
 
@@ -236,6 +239,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             request_id,
             self.handle_blobs_by_root_request_inner(peer_id, request_id, request),
             Response::BlobsByRoot,
+            Protocol::BlobsByRoot,
         );
     }
 
@@ -328,6 +332,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             request_id,
             self.handle_data_columns_by_root_request_inner(peer_id, request_id, request),
             Response::DataColumnsByRoot,
+            Protocol::DataColumnsByRoot,
         );
     }
 
@@ -409,6 +414,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 }
             },
             Response::LightClientBootstrap,
+            Protocol::LightClientBootstrap,
         );
     }
 
@@ -433,6 +439,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 )),
             },
             Response::LightClientOptimisticUpdate,
+            Protocol::LightClientOptimisticUpdate,
         );
     }
 
@@ -457,6 +464,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 )),
             },
             Response::LightClientFinalityUpdate,
+            Protocol::LightClientFinalityUpdate,
         );
     }
 
@@ -474,6 +482,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 .handle_blocks_by_range_request_inner(peer_id, request_id, req)
                 .await,
             Response::BlocksByRange,
+            Protocol::BlocksByRange,
         );
     }
 
@@ -698,6 +707,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             request_id,
             self.handle_blobs_by_range_request_inner(peer_id, request_id, req),
             Response::BlobsByRange,
+            Protocol::BlobsByRange,
         );
     }
 
@@ -893,6 +903,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             request_id,
             self.handle_data_columns_by_range_request_inner(peer_id, request_id, req),
             Response::DataColumnsByRange,
+            Protocol::DataColumnsByRange,
         );
     }
 
@@ -1083,6 +1094,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         request_id: PeerRequestId,
         result: Result<R, (RPCResponseErrorCode, &'static str)>,
         into_response: F,
+        protocol: Protocol,
     ) {
         match result {
             Ok(resp) => {
@@ -1096,7 +1108,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 });
             }
             Err((error_code, reason)) => {
-                self.send_error_response(peer_id, error_code, reason.into(), request_id);
+                self.send_error_response(peer_id, error_code, reason.into(), request_id, protocol);
             }
         }
     }
@@ -1109,6 +1121,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         request_id: PeerRequestId,
         result: Result<(), (RPCResponseErrorCode, &'static str)>,
         into_response: F,
+        protocol: Protocol,
     ) {
         match result {
             Ok(_) => self.send_network_message(NetworkMessage::SendResponse {
@@ -1117,7 +1130,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 id: request_id,
             }),
             Err((error_code, reason)) => {
-                self.send_error_response(peer_id, error_code, reason.into(), request_id);
+                self.send_error_response(peer_id, error_code, reason.into(), request_id, protocol);
             }
         }
     }

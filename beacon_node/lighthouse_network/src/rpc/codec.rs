@@ -24,6 +24,8 @@ use types::{
 };
 use unsigned_varint::codec::Uvi;
 
+use super::Protocol;
+
 const CONTEXT_BYTES_LEN: usize = 4;
 
 /* Inbound Codec */
@@ -92,7 +94,7 @@ impl<E: EthSpec> SSZSnappyInboundCodec<E> {
                     }
                 }
             },
-            RPCCodedResponse::Error(_, err) => err.as_ssz_bytes(),
+            RPCCodedResponse::Error(_, err, _protocol) => err.as_ssz_bytes(),
             RPCCodedResponse::StreamTermination(_) => {
                 unreachable!("Code error - attempting to encode a stream termination")
             }
@@ -241,6 +243,7 @@ impl<E: EthSpec> SSZSnappyOutboundCodec<E> {
                 self.fork_name = Some(context_bytes_to_fork_name(
                     result,
                     self.fork_context.clone(),
+                    self.protocol.versioned_protocol.protocol(),
                 )?);
             } else {
                 return Ok(None);
@@ -392,8 +395,15 @@ impl<E: EthSpec> Decoder for SSZSnappyOutboundCodec<E> {
                     .map(|r| r.map(RPCCodedResponse::Success))
             } else {
                 // decode an error
-                self.decode_error(src)
-                    .map(|r| r.map(|resp| RPCCodedResponse::from_error(response_code, resp)))
+                self.decode_error(src).map(|r| {
+                    r.map(|resp| {
+                        RPCCodedResponse::from_error(
+                            response_code,
+                            resp,
+                            self.protocol.versioned_protocol.protocol(),
+                        )
+                    })
+                })
             }
         };
         // if the inner decoder was capable of decoding a chunk, we need to reset the current
@@ -664,6 +674,7 @@ fn handle_rpc_response<E: EthSpec>(
             Some(_) => Err(RPCError::ErrorResponse(
                 RPCResponseErrorCode::InvalidRequest,
                 "Invalid fork name for blobs by range".to_string(),
+                versioned_protocol.protocol(),
             )),
             None => Err(RPCError::ErrorResponse(
                 RPCResponseErrorCode::InvalidRequest,
@@ -671,6 +682,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::BlobsByRootV1 => match fork_name {
@@ -680,6 +692,7 @@ fn handle_rpc_response<E: EthSpec>(
             Some(_) => Err(RPCError::ErrorResponse(
                 RPCResponseErrorCode::InvalidRequest,
                 "Invalid fork name for blobs by root".to_string(),
+                versioned_protocol.protocol(),
             )),
             None => Err(RPCError::ErrorResponse(
                 RPCResponseErrorCode::InvalidRequest,
@@ -687,6 +700,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::DataColumnsByRootV1 => match fork_name {
@@ -702,6 +716,7 @@ fn handle_rpc_response<E: EthSpec>(
                     Err(RPCError::ErrorResponse(
                         RPCResponseErrorCode::InvalidRequest,
                         "Invalid fork name for data columns by root".to_string(),
+                        versioned_protocol.protocol(),
                     ))
                 }
             }
@@ -711,6 +726,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::DataColumnsByRangeV1 => match fork_name {
@@ -723,6 +739,7 @@ fn handle_rpc_response<E: EthSpec>(
                     Err(RPCError::ErrorResponse(
                         RPCResponseErrorCode::InvalidRequest,
                         "Invalid fork name for data columns by range".to_string(),
+                        versioned_protocol.protocol(),
                     ))
                 }
             }
@@ -732,6 +749,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::PingV1 => Ok(Some(RPCResponse::Pong(Ping {
@@ -750,6 +768,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::LightClientOptimisticUpdateV1 => match fork_name {
@@ -762,6 +781,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::LightClientFinalityUpdateV1 => match fork_name {
@@ -774,6 +794,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         // MetaData V2/V3 responses have no context bytes, so behave similarly to V1 responses
@@ -815,6 +836,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
         SupportedProtocol::BlocksByRootV2 => match fork_name {
@@ -848,6 +870,7 @@ fn handle_rpc_response<E: EthSpec>(
                     "No context bytes provided for {:?} response",
                     versioned_protocol
                 ),
+                versioned_protocol.protocol(),
             )),
         },
     }
@@ -857,6 +880,7 @@ fn handle_rpc_response<E: EthSpec>(
 fn context_bytes_to_fork_name(
     context_bytes: [u8; CONTEXT_BYTES_LEN],
     fork_context: Arc<ForkContext>,
+    protocol: Protocol,
 ) -> Result<ForkName, RPCError> {
     fork_context
         .from_context_bytes(context_bytes)
@@ -869,6 +893,7 @@ fn context_bytes_to_fork_name(
                     "Context bytes {} do not correspond to a valid fork",
                     encoded
                 ),
+                protocol,
             )
         })
 }
@@ -1549,7 +1574,7 @@ mod tests {
                 &chain_spec,
             )
             .unwrap_err(),
-            RPCError::ErrorResponse(RPCResponseErrorCode::InvalidRequest, _),
+            RPCError::ErrorResponse(RPCResponseErrorCode::InvalidRequest, _, _),
         ));
 
         let mut encoded_bytes = encode_response(
@@ -1570,7 +1595,7 @@ mod tests {
                 &chain_spec,
             )
             .unwrap_err(),
-            RPCError::ErrorResponse(RPCResponseErrorCode::InvalidRequest, _),
+            RPCError::ErrorResponse(RPCResponseErrorCode::InvalidRequest, _, _),
         ));
 
         // Trying to decode a base block with altair context bytes should give ssz decoding error
@@ -1664,7 +1689,7 @@ mod tests {
                 &chain_spec,
             )
             .unwrap_err(),
-            RPCError::ErrorResponse(RPCResponseErrorCode::InvalidRequest, _),
+            RPCError::ErrorResponse(RPCResponseErrorCode::InvalidRequest, _, _),
         ));
 
         // Sending bytes less than context bytes length should wait for more bytes by returning `Ok(None)`

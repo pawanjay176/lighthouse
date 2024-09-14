@@ -819,7 +819,7 @@ pub enum RPCError {
     /// IO Error.
     IoError(String),
     /// The peer returned a valid response but the response indicated an error.
-    ErrorResponse(RPCResponseErrorCode, String),
+    ErrorResponse(RPCResponseErrorCode, String, Protocol),
     /// Timed out waiting for a response.
     StreamTimeout,
     /// Peer does not support the protocol.
@@ -863,10 +863,10 @@ impl std::fmt::Display for RPCError {
             RPCError::SSZDecodeError(ref err) => write!(f, "Error while decoding ssz: {:?}", err),
             RPCError::InvalidData(ref err) => write!(f, "Peer sent unexpected data: {}", err),
             RPCError::IoError(ref err) => write!(f, "IO Error: {}", err),
-            RPCError::ErrorResponse(ref code, ref reason) => write!(
+            RPCError::ErrorResponse(ref code, ref reason, ref protocol) => write!(
                 f,
-                "RPC response was an error: {} with reason: {}",
-                code, reason
+                "RPC response for protocol {} was an error: {} with reason: {}",
+                code, protocol, reason
             ),
             RPCError::StreamTimeout => write!(f, "Stream Timeout"),
             RPCError::UnsupportedProtocol => write!(f, "Peer does not support the protocol"),
@@ -890,7 +890,7 @@ impl std::error::Error for RPCError {
             RPCError::IncompleteStream => None,
             RPCError::InvalidData(_) => None,
             RPCError::InternalError(_) => None,
-            RPCError::ErrorResponse(_, _) => None,
+            RPCError::ErrorResponse(_, _, _) => None,
             RPCError::NegotiationTimeout => None,
             RPCError::HandlerRejected => None,
             RPCError::Disconnected => None,

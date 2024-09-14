@@ -527,7 +527,7 @@ impl<E: EthSpec> PeerManager<E> {
                 // this could their fault or ours, so we tolerate this
                 PeerAction::HighToleranceError
             }
-            RPCError::ErrorResponse(code, _) => match code {
+            RPCError::ErrorResponse(code, _, _) => match code {
                 RPCResponseErrorCode::Unknown => PeerAction::HighToleranceError,
                 RPCResponseErrorCode::ResourceUnavailable => {
                     // Don't ban on this because we want to retry with a block by root request.

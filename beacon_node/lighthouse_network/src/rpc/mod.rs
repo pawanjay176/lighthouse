@@ -14,12 +14,14 @@ use libp2p::swarm::{
 use libp2p::swarm::{ConnectionClosed, FromSwarm, SubstreamProtocol, THandlerInEvent};
 use libp2p::PeerId;
 use parking_lot::Mutex;
-use rate_limiter::RPCRateLimiter as RateLimiter;
-use slog::{debug, o};
+use rate_limiter::{RPCRateLimiter as RateLimiter, RateLimitedErr};
+use slog::{crit, debug, o};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::time::Instant;
+use tokio_util::time::DelayQueue;
 use types::{EthSpec, ForkContext};
 
 pub(crate) use handler::{HandlerErr, HandlerEvent};
@@ -139,6 +141,21 @@ pub struct RPC<Id: ReqId, E: EthSpec> {
     log: slog::Logger,
     /// Networking constant values
     network_params: NetworkParams,
+
+    /// Rate limiter for our responses and the PeerId that this handler interacts with.
+    /// The PeerId is necessary since the rate limiter manages rate limiting per peer.
+    response_limiter_new: RateLimiter,
+
+    /// Responses queued for sending. These responses are stored when the response limiter rejects them.
+    delayed_responses: DelayQueue<QueuedResponse<E>>,
+}
+
+#[derive(Clone)]
+struct QueuedResponse<E: EthSpec> {
+    response: RPCCodedResponse<E>,
+    substream_id: SubstreamId,
+    connection_id: ConnectionId,
+    peer_id: PeerId,
 }
 
 impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
@@ -163,7 +180,9 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
         let outbound_request_limiter = outbound_rate_limiter_config.map(|config| {
             SelfRateLimiter::new(config, log.clone()).expect("Configuration parameters are valid")
         });
-
+        let response_limiter_new =
+            RateLimiter::new_with_config(inbound_rate_limiter_config.as_ref().unwrap().0.clone())
+                .expect("Inbound limiter configuration parameters are valid");
         RPC {
             response_limiter,
             outbound_request_limiter,
@@ -173,6 +192,36 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
             enable_light_client_server,
             log,
             network_params,
+            response_limiter_new,
+            delayed_responses: Default::default(),
+        }
+    }
+
+    /// Checks if the response limiter allows the response. If the response should be delayed, the
+    /// duration to wait is returned.
+    fn try_response_limiter(
+        &mut self,
+        peer_id: &PeerId,
+        response: &RPCCodedResponse<E>,
+    ) -> Result<(), Duration> {
+        match self.response_limiter_new.allows(peer_id, response) {
+            Ok(()) => Ok(()),
+            Err(e) => match e {
+                RateLimitedErr::TooLarge => {
+                    // This should never happen with default parameters. Let's just send the response.
+                    // Log a crit since this is a config issue.
+                    crit!(
+                       self.log,
+                        "Response rate limiting error for a batch that will never fit. Sending response anyway. Check configuration parameters.";
+                        "protocol" => %response.protocol()
+                    );
+                    Ok(())
+                }
+                RateLimitedErr::TooSoon(wait_time) => {
+                    debug!(self.log, "Response rate limiting"; "protocol" => %response.protocol(), "wait_time_ms" => wait_time.as_millis(), "peer_id" => %peer_id);
+                    Err(wait_time)
+                }
+            },
         }
     }
 
@@ -187,11 +236,33 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
     ) {
         self.active_inbound_requests_limiter
             .remove_request(peer_id, &id.0, &id.1);
+        match self.try_response_limiter(&peer_id, &event) {
+            Ok(()) => self.send_response_inner(peer_id, id, event),
+            Err(wait_time) => {
+                self.delayed_responses.insert_at(
+                    QueuedResponse {
+                        connection_id: id.0,
+                        substream_id: id.1,
+                        peer_id,
+                        response: event,
+                    },
+                    Instant::now() + wait_time,
+                );
+            }
+        }
+    }
+
+    fn send_response_inner(
+        &mut self,
+        peer_id: PeerId,
+        id: (ConnectionId, SubstreamId),
+        event: RPCCodedResponse<E>,
+    ) {
         self.events.push(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(id.0),
             event: RPCSend::Response(id.1, event),
-        });
+        })
     }
 
     /// Submits an RPC request.
@@ -404,6 +475,7 @@ where
                             RPCResponseErrorCode::RateLimited,
                             "Rate limited. There is an active request with the same protocol"
                                 .into(),
+                            req.versioned_protocol().protocol(),
                         ),
                     );
                     return;
@@ -420,6 +492,7 @@ where
                         RPCCodedResponse::Error(
                             RPCResponseErrorCode::InvalidRequest,
                             "The request requires responses greater than the number defined in the spec.".into(),
+                            req.versioned_protocol().protocol(),
                         ),
                     );
                 } else {
@@ -459,6 +532,26 @@ where
             if let Poll::Ready(event) = self_limiter.poll_ready(cx) {
                 self.events.push(event)
             }
+        }
+
+        match self.delayed_responses.poll_expired(cx) {
+            Poll::Ready(Some(queued_response)) => {
+                let QueuedResponse {
+                    peer_id,
+                    connection_id,
+                    substream_id,
+                    response,
+                } = queued_response.into_inner();
+                debug!(
+                    self.log,
+                    "Sending delayed response";
+                    "peer_id" => %peer_id
+                );
+                self.send_response_inner(peer_id, (connection_id, substream_id), response);
+            }
+            // `Poll::Ready(None)` means that there are no more entries in the delay queue and we
+            // will continue to get this result until something else is added into the queue.
+            Poll::Ready(None) | Poll::Pending => (),
         }
 
         if !self.events.is_empty() {

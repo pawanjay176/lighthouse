@@ -1,4 +1,6 @@
+use super::super::metrics::RATE_LIMITER_PROCESSING;
 use super::config::RateLimiterConfig;
+use crate::metrics;
 use crate::rpc::Protocol;
 use fnv::FnvHashMap;
 use libp2p::PeerId;
@@ -272,9 +274,9 @@ impl<E: EthSpec> RateLimiterItem for super::OutboundRequest<E> {
     }
 }
 
-impl<E: EthSpec> RateLimiterItem for (super::RPCCodedResponse<E>, Protocol) {
+impl<E: EthSpec> RateLimiterItem for super::RPCCodedResponse<E> {
     fn protocol(&self) -> Protocol {
-        self.1
+        self.protocol()
     }
 
     fn max_responses(&self) -> u64 {
@@ -335,6 +337,7 @@ impl RPCRateLimiter {
         peer_id: &PeerId,
         request: &Item,
     ) -> Result<(), RateLimitedErr> {
+        let processing_timer = metrics::start_timer(&RATE_LIMITER_PROCESSING);
         let time_since_start = self.init_time.elapsed();
         let tokens = request.max_responses().max(1);
 
@@ -355,7 +358,9 @@ impl RPCRateLimiter {
             Protocol::LightClientOptimisticUpdate => &mut self.lc_optimistic_update_rl,
             Protocol::LightClientFinalityUpdate => &mut self.lc_finality_update_rl,
         };
-        check(limiter)
+        let res = check(limiter);
+        metrics::stop_timer(processing_timer);
+        res
     }
 
     pub fn prune(&mut self) {

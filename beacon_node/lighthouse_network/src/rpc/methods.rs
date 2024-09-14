@@ -542,6 +542,19 @@ pub enum ResponseTermination {
     DataColumnsByRange,
 }
 
+impl ResponseTermination {
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            Self::BlocksByRange => Protocol::BlocksByRange,
+            Self::BlocksByRoot => Protocol::BlocksByRoot,
+            Self::BlobsByRange => Protocol::BlobsByRange,
+            Self::BlobsByRoot => Protocol::BlobsByRoot,
+            Self::DataColumnsByRange => Protocol::DataColumnsByRange,
+            Self::DataColumnsByRoot => Protocol::DataColumnsByRoot,
+        }
+    }
+}
+
 /// The structured response containing a result/code indicating success or failure
 /// and the contents of the response
 #[derive(Debug, Clone)]
@@ -549,7 +562,7 @@ pub enum RPCCodedResponse<E: EthSpec> {
     /// The response is a successful.
     Success(RPCResponse<E>),
 
-    Error(RPCResponseErrorCode, ErrorType),
+    Error(RPCResponseErrorCode, ErrorType, Protocol),
 
     /// Received a stream termination indicating which response is being terminated.
     StreamTermination(ResponseTermination),
@@ -579,8 +592,16 @@ impl<E: EthSpec> RPCCodedResponse<E> {
     pub fn as_u8(&self) -> Option<u8> {
         match self {
             RPCCodedResponse::Success(_) => Some(0),
-            RPCCodedResponse::Error(code, _) => Some(code.as_u8()),
+            RPCCodedResponse::Error(code, _, _) => Some(code.as_u8()),
             RPCCodedResponse::StreamTermination(_) => None,
+        }
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            Self::Success(resp) => resp.protocol(),
+            Self::Error(_, _, protocol) => *protocol,
+            Self::StreamTermination(term) => term.protocol(),
         }
     }
 
@@ -590,7 +611,7 @@ impl<E: EthSpec> RPCCodedResponse<E> {
     }
 
     /// Builds an RPCCodedResponse from a response code and an ErrorMessage
-    pub fn from_error(response_code: u8, err: ErrorType) -> Self {
+    pub fn from_error(response_code: u8, err: ErrorType, protocol: Protocol) -> Self {
         let code = match response_code {
             1 => RPCResponseErrorCode::InvalidRequest,
             2 => RPCResponseErrorCode::ServerError,
@@ -599,7 +620,7 @@ impl<E: EthSpec> RPCCodedResponse<E> {
             140 => RPCResponseErrorCode::BlobsNotFoundForBlock,
             _ => RPCResponseErrorCode::Unknown,
         };
-        RPCCodedResponse::Error(code, err)
+        RPCCodedResponse::Error(code, err, protocol)
     }
 
     /// Returns true if this response always terminates the stream.
@@ -714,7 +735,9 @@ impl<E: EthSpec> std::fmt::Display for RPCCodedResponse<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RPCCodedResponse::Success(res) => write!(f, "{}", res),
-            RPCCodedResponse::Error(code, err) => write!(f, "{}: {}", code, err),
+            RPCCodedResponse::Error(code, err, protocol) => {
+                write!(f, "{}: {} {}", code, err, protocol)
+            }
             RPCCodedResponse::StreamTermination(_) => write!(f, "Stream Termination"),
         }
     }
