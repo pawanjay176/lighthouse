@@ -1,4 +1,3 @@
-use super::super::metrics::RATE_LIMITER_PROCESSING;
 use super::config::RateLimiterConfig;
 use crate::metrics;
 use crate::rpc::Protocol;
@@ -337,7 +336,6 @@ impl RPCRateLimiter {
         peer_id: &PeerId,
         request: &Item,
     ) -> Result<(), RateLimitedErr> {
-        let processing_timer = metrics::start_timer(&RATE_LIMITER_PROCESSING);
         let time_since_start = self.init_time.elapsed();
         let tokens = request.max_responses().max(1);
 
@@ -358,9 +356,7 @@ impl RPCRateLimiter {
             Protocol::LightClientOptimisticUpdate => &mut self.lc_optimistic_update_rl,
             Protocol::LightClientFinalityUpdate => &mut self.lc_finality_update_rl,
         };
-        let res = check(limiter);
-        metrics::stop_timer(processing_timer);
-        res
+        check(limiter)
     }
 
     pub fn prune(&mut self) {
