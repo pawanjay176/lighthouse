@@ -107,10 +107,10 @@ fn make_request() -> Request<Body> {
 }
 
 #[tokio::test]
-async fn test_endpoint_performance_and_response() {
-    println!("Starting performance and response comparison test...\n");
+async fn test_endpoint_response_verification() {
+    println!("Starting response verification...\n");
 
-    // Endpoints setup
+    // Setup endpoints
     let ctx = setup_test_context().await;
     let warp_filter = setup_warp_routes(ctx.clone())
         .await
@@ -118,9 +118,7 @@ async fn test_endpoint_performance_and_response() {
     let axum_app_no_spawner = setup_axum_genesis_endpoint_without_task_spawner(ctx.clone());
     let axum_app_with_spawner = setup_axum_genesis_endpoint_with_task_spawner(ctx);
 
-    // Get endpoints calls' respponses
-    println!("Comparing responses...");
-
+    // Obtain responses from endpoints
     let warp_response = warp::test::request()
         .method("GET")
         .path("/eth/v1/beacon/genesis")
@@ -129,32 +127,19 @@ async fn test_endpoint_performance_and_response() {
 
     let axum_response_no_spawner = axum_app_no_spawner
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/eth/v1/beacon/genesis")
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(make_request())
         .await
         .unwrap();
 
     let axum_response_with_spawner = axum_app_with_spawner
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/eth/v1/beacon/genesis")
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(make_request())
         .await
         .unwrap();
 
-    // Verify all responses match
+    // Deserialize bodies
     let warp_body: GenericResponse<GenesisData> =
         serde_json::from_slice(warp_response.body()).unwrap();
-
     let warp_status = warp_response.status().as_u16();
     let axum_no_spawner_status = axum_response_no_spawner.status().as_u16();
     let axum_with_spawner_status = axum_response_with_spawner.status().as_u16();
@@ -174,10 +159,9 @@ async fn test_endpoint_performance_and_response() {
     let axum_body_with_spawner: GenericResponse<GenesisData> =
         serde_json::from_slice(&axum_body_with_spawner_bytes).unwrap();
 
-    // Verify responses match
+    // Validate consistency across responses
     println!("\nVerifying response consistency across implementations:");
     println!("----------------------------------------");
-
     // Genesis Time
     assert_eq!(
         warp_body.data.genesis_time, axum_body_no_spawner.data.genesis_time,
@@ -235,34 +219,45 @@ async fn test_endpoint_performance_and_response() {
     );
 
     println!("----------------------------------------");
-    println!("All response validations passed successfully!\n");
+    println!("✓ Response verification passed successfully!\n");
+}
+
+#[tokio::test]
+async fn test_endpoint_performance() {
+    println!("Starting performance benchmarking...\n");
 
     const NUM_REQUESTS: u32 = 100;
     const WARMUP_REQUESTS: u32 = 5;
 
-    // Warmup all implementations
+    // Setup endpoints
+    let ctx = setup_test_context().await;
+    let warp_filter = setup_warp_routes(ctx.clone())
+        .await
+        .expect("should create warp routes");
+    let axum_app_no_spawner = setup_axum_genesis_endpoint_without_task_spawner(ctx.clone());
+    let axum_app_with_spawner = setup_axum_genesis_endpoint_with_task_spawner(ctx);
+
+    // Warmup to stabilize results
     println!("\nPerforming warmup requests...");
     for _ in 0..WARMUP_REQUESTS {
-        let _warp_resp = warp::test::request()
+        warp::test::request()
             .method("GET")
             .path("/eth/v1/beacon/genesis")
             .reply(&warp_filter)
             .await;
-
-        let _axum_resp_no_spawner = axum_app_no_spawner
+        axum_app_no_spawner
             .clone()
             .oneshot(make_request())
             .await
             .unwrap();
-
-        let _axum_resp_with_spawner = axum_app_with_spawner
+        axum_app_with_spawner
             .clone()
             .oneshot(make_request())
             .await
             .unwrap();
     }
 
-    // Test all implementations
+    // Benchmark each implementation
     let warp_duration = helper_test_performance("Warp", NUM_REQUESTS, || async {
         warp::test::request()
             .method("GET")
@@ -305,14 +300,12 @@ async fn test_endpoint_performance_and_response() {
         warp_duration,
         warp_duration / NUM_REQUESTS
     );
-
     println!(
         "Axum (no task spawner)      | {:>9?} | {:>14?} |  {:.2}x slower",
         axum_no_spawner_duration,
         axum_no_spawner_duration / NUM_REQUESTS,
         axum_no_spawner_duration.as_secs_f64() / warp_duration.as_secs_f64()
     );
-
     println!(
         "Axum (with task spawner)    | {:>9?} | {:>14?} |  {:.2}x slower",
         axum_with_spawner_duration,
@@ -337,7 +330,5 @@ where
     }
     let duration = start.elapsed();
     println!(" Done!");
-    println!("Total time: {:?}", duration);
-    println!("Average time: {:?}", duration / num_requests);
     duration
 }
