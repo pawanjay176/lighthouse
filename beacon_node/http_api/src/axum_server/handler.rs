@@ -141,6 +141,23 @@ pub async fn get_beacon_genesis<T: BeaconChainTypes>(
         .await
 }
 
+/// GET beacon/genesis
+/// Without task spawner 
+/// Only for test comparison
+pub async fn get_beacon_genesis_without_task_spawner<T: BeaconChainTypes>(
+    State(ctx): State<Arc<Context<T>>>,
+) -> Result<Json<GenericResponse<GenesisData>>, HandlerError> {
+    let chain = chain_filter(&ctx)?;
+    
+    let genesis_data = GenesisData {
+        genesis_time: chain.genesis_time,
+        genesis_validators_root: chain.genesis_validators_root,
+        genesis_fork_version: chain.spec.genesis_fork_version,
+    };
+    
+    Ok(Json(GenericResponse::from(genesis_data)))
+}
+
 /// GET beacon/blocks/{block_id}/root
 pub async fn get_beacon_blocks_root<T: BeaconChainTypes>(
     State(ctx): State<Arc<Context<T>>>,

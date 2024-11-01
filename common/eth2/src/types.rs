@@ -1222,7 +1222,7 @@ impl<E: EthSpec> EventKind<E> {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct EventQuery {
     #[serde(deserialize_with = "query_vec")]
