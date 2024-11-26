@@ -1,9 +1,9 @@
 use crate::ExecutionOptimistic;
 use beacon_chain::{BeaconChain, BeaconChainError, BeaconChainTypes};
 use eth2::types::StateId as CoreStateId;
+use serde::Deserialize;
 use std::fmt;
 use std::str::FromStr;
-use serde::Deserialize;
 use types::{BeaconState, Checkpoint, EthSpec, Fork, Hash256, Slot};
 
 /// Wraps `eth2::types::StateId` and provides common state-access functionality. E.g., reading

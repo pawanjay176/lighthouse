@@ -1,7 +1,7 @@
 use axum::{
     http::{header::CONTENT_TYPE, HeaderValue, Method},
     routing::{get, post},
-    Router,
+    Extension, Router,
 };
 use beacon_chain::BeaconChainTypes;
 
@@ -9,27 +9,22 @@ mod error;
 pub mod handler;
 pub mod task_spawner;
 use super::Context;
+use crate::axum_server::task_spawner::{create_task_spawner, create_trace_layer};
 use axum_server::tls_rustls::RustlsConfig;
 use slog::info;
-use std::net::IpAddr;
-use std::sync::Arc;
 use std::future::Future;
+use std::net::IpAddr;
 use std::net::{SocketAddr, TcpListener};
-use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
-    trace::{DefaultOnRequest, TraceLayer},
-};
-
-// Custom `on_request` function for logging
-fn on_request() -> DefaultOnRequest {
-    DefaultOnRequest::new()
-}
+use std::sync::Arc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
+    let spawner = create_task_spawner(&ctx);
+
     Router::new()
         .route(
             "/eth/v1/beacon/genesis",
-            get(handler::get_beacon_genesis::<T>),
+            get(handler::get_beacon_genesis_without_task_spawner::<T>),
         )
         .route(
             "/eth/v1/beacon/blocks/:block_id/root",
@@ -136,8 +131,8 @@ pub fn routes<T: BeaconChainTypes>(ctx: Arc<Context<T>>) -> Router {
         )
         .route("/eth/v1/events", get(handler::get_events::<T>))
         .fallback(handler::catch_all)
-        // .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(TraceLayer::new_for_http().on_request(on_request()))
+        .layer(Extension(spawner))
+        .layer(create_trace_layer())
         .with_state(ctx)
 }
 
@@ -240,10 +235,7 @@ pub async fn start_server<T: BeaconChainTypes>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        http::Request,
-    };
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use serde_json::Value;
     use tower::ServiceExt; // for `call`, `oneshot`, and `ready`

@@ -31,9 +31,11 @@ mod validator_inclusion;
 mod validators;
 mod version;
 
-pub use axum_server::handler;
-pub use axum_server::task_spawner::{Priority as AxumServerPriority, TaskSpawner as AxumTaskSpawner};
 use crate::produce_block::{produce_blinded_block_v2, produce_block_v2, produce_block_v3};
+pub use axum_server::handler;
+pub use axum_server::task_spawner::{
+    Priority as AxumServerPriority, TaskSpawner as AxumTaskSpawner,
+};
 use beacon_chain::{
     attestation_verification::VerifiedAttestation, observed_operations::ObservationOutcome,
     validator_monitor::timestamp_now, AttestationError as AttnError, BeaconChain, BeaconChainError,
