@@ -5,6 +5,12 @@ use serde::Serialize;
 use tokio::sync::{mpsc::error::TrySendError, oneshot};
 use types::EthSpec;
 
+use crate::{BeaconChainTypes, Context};
+use tower_http::{
+    classify::{ServerErrorsAsFailures, SharedClassifier},
+    trace::{DefaultOnRequest, TraceLayer},
+};
+
 /// Maps a request to a queue in the `BeaconProcessor`.
 #[derive(Clone, Copy)]
 pub enum Priority {
@@ -28,11 +34,26 @@ impl Priority {
     }
 }
 
+pub type GlobalTaskSpawner<E> = TaskSpawner<E>;
+
+#[derive(Clone)]
 /// Spawns tasks on the `BeaconProcessor` or directly on the tokio executor.
 pub struct TaskSpawner<E: EthSpec> {
     /// Used to send tasks to the `BeaconProcessor`. The tokio executor will be
     /// used if this is `None`.
     beacon_processor_send: Option<BeaconProcessorSend<E>>,
+}
+
+pub fn create_task_spawner<T: BeaconChainTypes>(ctx: &Context<T>) -> TaskSpawner<T::EthSpec> {
+    TaskSpawner::new(
+        ctx.beacon_processor_send
+            .clone()
+            .filter(|_| ctx.config.enable_beacon_processor),
+    )
+}
+
+pub fn create_trace_layer() -> TraceLayer<SharedClassifier<ServerErrorsAsFailures>> {
+    TraceLayer::new_for_http().on_request(DefaultOnRequest::new())
 }
 
 impl<E: EthSpec> TaskSpawner<E> {

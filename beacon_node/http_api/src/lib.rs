@@ -7,7 +7,7 @@
 
 mod attestation_performance;
 mod attester_duties;
-mod axum_server;
+pub mod axum_server;
 mod block_id;
 mod block_packing_efficiency;
 mod block_rewards;
@@ -23,7 +23,7 @@ mod standard_block_rewards;
 mod state_id;
 mod sync_committee_rewards;
 mod sync_committees;
-mod task_spawner;
+pub mod task_spawner;
 pub mod test_utils;
 mod ui;
 mod validator;
@@ -32,6 +32,10 @@ mod validators;
 mod version;
 
 use crate::produce_block::{produce_blinded_block_v2, produce_block_v2, produce_block_v3};
+pub use axum_server::handler;
+pub use axum_server::task_spawner::{
+    Priority as AxumServerPriority, TaskSpawner as AxumTaskSpawner,
+};
 use beacon_chain::{
     attestation_verification::VerifiedAttestation, observed_operations::ObservationOutcome,
     validator_monitor::timestamp_now, AttestationError as AttnError, BeaconChain, BeaconChainError,
