@@ -273,6 +273,10 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// duplicates from being propagated to the application and on the network.
     duplicate_cache: DuplicateCache<MessageId>,
 
+    /// An LRU time cache for storing messages that we have sent idontwants for outside the normal
+    /// publish/receive flows.
+    idontwant_cache: DuplicateCache<MessageId>,
+
     /// A set of connected peers, indexed by their [`PeerId`] tracking both the [`PeerKind`] and
     /// the set of [`ConnectionId`]s.
     connected_peers: HashMap<PeerId, PeerConnections>,
@@ -455,6 +459,7 @@ where
             events: VecDeque::new(),
             publish_config: privacy.into(),
             duplicate_cache: DuplicateCache::new(config.duplicate_cache_time()),
+            idontwant_cache: DuplicateCache::new(Duration::from_secs(6)),
             explicit_peers: HashSet::new(),
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
@@ -2771,6 +2776,9 @@ where
         msg_id: &MessageId,
         propagation_source: Option<&PeerId>,
     ) {
+        if self.idontwant_cache.contains(msg_id) {
+            return;
+        }
         let Some(mesh_peers) = self.mesh.get(topic) else {
             return;
         };
@@ -2814,6 +2822,7 @@ where
                 return;
             }
             // IDONTWANT sent successfully.
+            self.idontwant_cache.insert(msg_id.clone());
             if let Some(metrics) = self.metrics.as_mut() {
                 peer.dont_send_sent.insert(msg_id.clone(), Instant::now());
                 // Don't exceed capacity.
