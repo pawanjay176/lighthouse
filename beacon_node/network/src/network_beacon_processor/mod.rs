@@ -960,11 +960,28 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             }
         };
 
+        let self_cloned = self.clone();
+        let idontwant_fn = move |blobs: Vec<Arc<BlobSidecar<T::EthSpec>>>| {
+            if publish_blobs {
+                debug!(
+                    self_cloned.log,
+                    "Sending idontwant_messages prior to publication and gossip verification";
+                );
+                self_cloned.send_network_message(NetworkMessage::Idontwant {
+                    messages: blobs
+                        .into_iter()
+                        .map(|blob| PubsubMessage::BlobSidecar(Box::new((blob.index, blob))))
+                        .collect(),
+                });
+            }
+        };
+
         match fetch_and_process_engine_blobs(
             self.chain.clone(),
             block_root,
             block.clone(),
             publish_fn,
+            idontwant_fn,
         )
         .await
         {

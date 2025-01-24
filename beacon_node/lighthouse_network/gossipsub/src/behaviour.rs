@@ -781,7 +781,12 @@ where
 
         // Broadcast IDONTWANT messages
         if raw_message.raw_protobuf_len() > self.config.idontwant_message_size_threshold() {
-            self.send_idontwant(&raw_message, &msg_id, raw_message.source.as_ref());
+            self.send_idontwant(
+                &raw_message.topic,
+                raw_message.source.as_ref(),
+                &msg_id,
+                raw_message.source.as_ref(),
+            );
         }
 
         tracing::debug!(message=%msg_id, "Published message");
@@ -1846,7 +1851,12 @@ where
 
         // Broadcast IDONTWANT messages
         if raw_message.raw_protobuf_len() > self.config.idontwant_message_size_threshold() {
-            self.send_idontwant(&raw_message, &msg_id, Some(propagation_source));
+            self.send_idontwant(
+                &raw_message.topic,
+                raw_message.source.as_ref(),
+                &msg_id,
+                Some(propagation_source),
+            );
         }
 
         tracing::debug!(
@@ -2721,14 +2731,47 @@ where
         }
     }
 
+    pub fn send_idontwant_messages(
+        &mut self,
+        topic: impl Into<TopicHash>,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<(), PublishError> {
+        let data = data.into();
+        let topic = topic.into();
+
+        // Transform the data before building a raw_message.
+        let transformed_data = self
+            .data_transform
+            .outbound_transform(&topic, data.clone())?;
+
+        let raw_message = self.build_raw_message(topic, transformed_data)?;
+
+        // calculate the message id from the un-transformed data
+        let msg_id = self.config.message_id(&Message {
+            source: raw_message.source,
+            data, // the uncompressed form
+            sequence_number: raw_message.sequence_number,
+            topic: raw_message.topic.clone(),
+        });
+
+        self.send_idontwant(
+            &raw_message.topic,
+            raw_message.source.as_ref(),
+            &msg_id,
+            raw_message.source.as_ref(),
+        );
+        Ok(())
+    }
+
     /// Helper function which sends an IDONTWANT message to mesh\[topic\] peers.
     fn send_idontwant(
         &mut self,
-        message: &RawMessage,
+        topic: &TopicHash,
+        source: Option<&PeerId>,
         msg_id: &MessageId,
         propagation_source: Option<&PeerId>,
     ) {
-        let Some(mesh_peers) = self.mesh.get(&message.topic) else {
+        let Some(mesh_peers) = self.mesh.get(topic) else {
             return;
         };
 
@@ -2737,9 +2780,7 @@ where
         let recipient_peers = mesh_peers
             .iter()
             .chain(iwant_peers.iter())
-            .filter(|&peer_id| {
-                Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref()
-            });
+            .filter(|&peer_id| Some(peer_id) != propagation_source && Some(peer_id) != source);
 
         for peer_id in recipient_peers {
             let Some(peer) = self.connected_peers.get_mut(peer_id) else {
@@ -2779,7 +2820,7 @@ where
                 if peer.dont_send_sent.len() > IDONTWANT_CAP {
                     peer.dont_send_sent.pop_front();
                 }
-                metrics.register_idontwant_messages_sent_per_topic(&message.topic);
+                metrics.register_idontwant_messages_sent_per_topic(topic);
             }
         }
     }

@@ -79,6 +79,8 @@ pub enum NetworkMessage<E: EthSpec> {
     },
     /// Publish a list of messages to the gossipsub protocol.
     Publish { messages: Vec<PubsubMessage<E>> },
+    /// Send IDONTWANTs for the message prior to publish
+    Idontwant { messages: Vec<PubsubMessage<E>> },
     /// Validates a received gossipsub message. This will propagate the message on the network.
     ValidationResult {
         /// The peer that sent us the message. We don't send back to this peer.
@@ -678,6 +680,14 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                     "topics" => ?topic_kinds
                 );
                 self.libp2p.publish(messages);
+            }
+            NetworkMessage::Idontwant { messages } => {
+                debug!(
+                    self.log,
+                    "Sending IDONTWANT prior to publish";
+                    "count" => messages.len(),
+                );
+                self.libp2p.send_idont_want(messages);
             }
             NetworkMessage::ReportPeer {
                 peer_id,

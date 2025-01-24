@@ -820,6 +820,32 @@ impl<E: EthSpec> Network<E> {
         }
     }
 
+    pub fn send_idont_want(&mut self, messages: Vec<PubsubMessage<E>>) {
+        for message in messages {
+            for topic in message.topics(GossipEncoding::default(), self.enr_fork_id.fork_digest) {
+                let message_data = message.encode(GossipEncoding::default());
+                match self
+                    .gossipsub_mut()
+                    .send_idontwant_messages(Topic::from(topic.clone()), message_data.clone())
+                {
+                    Ok(()) => {
+                        debug!(
+                            self.log,
+                            "Successfully sent IDONTWANTs for messages prior to publication"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            self.log,
+                            "Failed to send IDONTWANTs prior to publication";
+                            "error" => ?e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Publishes a list of messages on the pubsub (gossipsub) behaviour, choosing the encoding.
     pub fn publish(&mut self, messages: Vec<PubsubMessage<E>>) {
         for message in messages {

@@ -49,6 +49,7 @@ pub async fn fetch_and_process_engine_blobs<T: BeaconChainTypes>(
     block_root: Hash256,
     block: Arc<SignedBeaconBlock<T::EthSpec, FullPayload<T::EthSpec>>>,
     publish_fn: impl Fn(BlobsOrDataColumns<T>) + Send + 'static,
+    idontwant_fn: impl Fn(Vec<Arc<BlobSidecar<T::EthSpec>>>) + Send + 'static,
 ) -> Result<Option<AvailabilityProcessingStatus>, FetchEngineBlobError> {
     let block_root_str = format!("{:?}", block_root);
     let log = chain
@@ -115,10 +116,14 @@ pub async fn fetch_and_process_engine_blobs<T: BeaconChainTypes>(
         &chain.spec,
     )?;
 
-    let num_fetched_blobs = fixed_blob_sidecar_list
+    let non_empty_blobs = fixed_blob_sidecar_list
         .iter()
-        .filter(|b| b.is_some())
-        .count();
+        .filter_map(|b| b.clone())
+        .collect::<Vec<_>>();
+
+    let num_fetched_blobs = non_empty_blobs.len();
+
+    idontwant_fn(non_empty_blobs);
 
     inc_counter_by(
         &metrics::BLOBS_FROM_EL_EXPECTED_TOTAL,
