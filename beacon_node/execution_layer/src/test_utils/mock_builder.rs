@@ -244,8 +244,12 @@ impl<E: EthSpec> BidStuff<E> for BuilderBid<E> {
 
     fn sign_builder_message(&mut self, sk: &SecretKey, spec: &ChainSpec) -> Signature {
         let domain = spec.get_builder_domain();
+        println!("Domain in sign {}", domain);
         let message = self.signing_root(domain);
-        sk.sign(message)
+        println!("Signing root in sign {}", message);
+        let signature = sk.sign(message);
+        println!("Signature in sign {}", signature);
+        signature
     }
 
     // this helps differentiate a builder block from a regular block
@@ -619,7 +623,12 @@ impl<E: EthSpec> MockBuilder<E> {
             info!(self.log, "Applying operations");
             self.apply_operations(&mut message);
         }
-        info!(self.log, "Signing builder message");
+        info!(
+            self.log,
+            "Signing builder message slot {}, block_number {:?}",
+            slot,
+            message.header().block_number()
+        );
 
         let mut signature = message.sign_builder_message(&self.builder_sk, &self.spec);
 

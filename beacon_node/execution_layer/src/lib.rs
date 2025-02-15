@@ -2079,6 +2079,10 @@ fn verify_builder_bid<E: EthSpec>(
         ..
     } = payload_parameters;
 
+    println!(
+        "Verifying bid signature for block number: {:?}",
+        block_number
+    );
     let is_signature_valid = bid.data.verify_signature(spec);
     let header = &bid.data.message.header();
 
@@ -2335,5 +2339,21 @@ mod test {
                 )
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use types::SecretKey;
+
+    #[test]
+    fn test_pk() {
+        let sk = SecretKey::deserialize(
+            &hex::decode("607a11b45a7219cc61a3d9c5fd08c7eebd602a6a19a977f8d3771d5711a550f2")
+                .unwrap(),
+        )
+        .unwrap();
+        sk.public
     }
 }

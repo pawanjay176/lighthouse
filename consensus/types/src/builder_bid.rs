@@ -176,9 +176,14 @@ impl<E: EthSpec> SignedBuilderBid<E> {
             .pubkey()
             .decompress()
             .map(|pubkey| {
+                println!("Pubkey {}", pubkey);
                 let domain = spec.get_builder_domain();
+                println!("Domain in sign {}", domain);
                 let message = self.message.signing_root(domain);
-                self.signature.verify(&pubkey, message)
+                println!("Signing root in sign {}", message);
+                let signature = self.signature.verify(&pubkey, message);
+                println!("Signature in sign {}", signature);
+                signature
             })
             .unwrap_or(false)
     }
