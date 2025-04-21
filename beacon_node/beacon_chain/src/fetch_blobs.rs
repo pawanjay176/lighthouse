@@ -10,7 +10,7 @@
 
 use crate::blob_verification::{GossipBlobError, GossipVerifiedBlob};
 use crate::data_column_verification::KzgVerifiedDataColumn;
-use crate::kzg_utils::{blobs_to_data_column_sidecars, blobs_to_data_column_sidecars_with_column};
+use crate::kzg_utils::blobs_to_data_column_sidecars;
 use crate::observed_data_sidecars::DoNotObserve;
 use crate::{
     metrics, AvailabilityProcessingStatus, BeaconChain, BeaconChainError, BeaconChainTypes,
@@ -24,11 +24,13 @@ use state_processing::per_block_processing::deneb::kzg_commitment_to_versioned_h
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
+use types::beacon_block_body::KzgCommitments;
 use types::blob_sidecar::{BlobSidecarError, FixedBlobSidecarList};
 use types::data_column_sidecar::DataColumnSidecarError;
 use types::{
     BeaconStateError, Blob, BlobSidecar, ChainSpec, ColumnIndex, DataColumnSidecarList, EthSpec,
-    FullPayload, Hash256, KzgProofs, SignedBeaconBlock, SignedBeaconBlockHeader, VersionedHash,
+    FullPayload, Hash256, KzgProofs, SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
+    VersionedHash,
 };
 
 /// Blobs or data column to be published to the gossip network.
@@ -59,6 +61,58 @@ pub enum FetchEngineBlobError {
     GossipBlob(GossipBlobError),
     RequestFailed(ExecutionLayerError),
     RuntimeShutdown,
+}
+
+#[derive(Clone)]
+/// A container to abstract the fields that you need to construct sidecars.
+pub struct FetchBlobsContainer<E: EthSpec> {
+    pub block_root: Hash256,
+    pub kzg_commitments: KzgCommitments<E>,
+    pub kzg_commitments_inclusion_proof: FixedVector<Hash256, E::KzgCommitmentsInclusionProofDepth>,
+    pub signed_block_header: SignedBeaconBlockHeader,
+}
+
+impl<E: EthSpec> FetchBlobsContainer<E> {
+    pub fn new_from_block(
+        block: Arc<SignedBeaconBlock<E, FullPayload<E>>>,
+        block_root: Hash256,
+    ) -> Result<Self, FetchEngineBlobError> {
+        Ok(Self {
+            block_root,
+            kzg_commitments: block
+                .message()
+                .body()
+                .blob_kzg_commitments()
+                .map_err(|_| FetchEngineBlobError::InternalError("Pre-deneb block".to_string()))?
+                .clone(),
+
+            kzg_commitments_inclusion_proof: block
+                .message()
+                .body()
+                .kzg_commitments_merkle_proof()
+                .map_err(|_| FetchEngineBlobError::InternalError("Pre deneb block".to_string()))?,
+            signed_block_header: block.signed_block_header(),
+        })
+    }
+
+    pub fn new_from_data_column(
+        data_column: KzgVerifiedDataColumn<E>,
+        block_root: Hash256,
+    ) -> Result<Self, FetchEngineBlobError> {
+        Ok(Self {
+            block_root,
+            kzg_commitments: data_column.as_data_column().kzg_commitments.clone(),
+            kzg_commitments_inclusion_proof: data_column
+                .as_data_column()
+                .kzg_commitments_inclusion_proof
+                .clone(),
+            signed_block_header: data_column.as_data_column().signed_block_header.clone(),
+        })
+    }
+
+    pub fn slot(&self) -> Slot {
+        self.signed_block_header.message.slot
+    }
 }
 
 /// Fetches blobs from the EL mempool and processes them. It also broadcasts unseen blobs or
@@ -92,10 +146,11 @@ pub async fn fetch_and_process_engine_blobs<T: BeaconChainTypes>(
     );
 
     if chain.spec.is_peer_das_enabled_for_epoch(block.epoch()) {
+        let fetch_blob_container = FetchBlobsContainer::new_from_block(block, block_root)?;
         fetch_and_process_blobs_v2(
             chain,
             block_root,
-            block,
+            fetch_blob_container,
             versioned_hashes,
             custody_columns,
             publish_fn,
@@ -192,7 +247,7 @@ async fn fetch_and_process_blobs_v1<T: BeaconChainTypes>(
 async fn fetch_and_process_blobs_v2<T: BeaconChainTypes>(
     chain: Arc<BeaconChain<T>>,
     block_root: Hash256,
-    block: Arc<SignedBeaconBlock<T::EthSpec>>,
+    fetch_blobs_container: FetchBlobsContainer<T::EthSpec>,
     versioned_hashes: Vec<VersionedHash>,
     custody_columns_indices: HashSet<ColumnIndex>,
     publish_fn: impl Fn(BlobsOrDataColumns<T>) + Send + 'static,
@@ -253,7 +308,7 @@ async fn fetch_and_process_blobs_v2<T: BeaconChainTypes>(
 
     let custody_columns = compute_and_publish_data_columns(
         &chain,
-        block.clone(),
+        fetch_blobs_container.clone(),
         blobs,
         proofs,
         custody_columns_indices,
@@ -265,7 +320,7 @@ async fn fetch_and_process_blobs_v2<T: BeaconChainTypes>(
 
     let availability_processing_status = chain
         .process_engine_blobs(
-            block.slot(),
+            fetch_blobs_container.slot(),
             block_root,
             EngineGetBlobsOutput::CustodyColumns(custody_columns),
         )
@@ -278,7 +333,7 @@ async fn fetch_and_process_blobs_v2<T: BeaconChainTypes>(
 /// Offload the data column computation to a blocking task to avoid holding up the async runtime.
 async fn compute_and_publish_data_columns<T: BeaconChainTypes>(
     chain: &Arc<BeaconChain<T>>,
-    block: Arc<SignedBeaconBlock<T::EthSpec, FullPayload<T::EthSpec>>>,
+    fetch_blobs_container: FetchBlobsContainer<T::EthSpec>,
     blobs: Vec<Blob<T::EthSpec>>,
     proofs: Vec<KzgProofs<T::EthSpec>>,
     custody_columns_indices: HashSet<ColumnIndex>,
@@ -298,7 +353,9 @@ async fn compute_and_publish_data_columns<T: BeaconChainTypes>(
                 let data_columns_result = blobs_to_data_column_sidecars(
                     &blob_refs,
                     cell_proofs,
-                    &block,
+                    fetch_blobs_container.kzg_commitments,
+                    fetch_blobs_container.kzg_commitments_inclusion_proof,
+                    fetch_blobs_container.signed_block_header,
                     &chain_cloned.kzg,
                     &chain_cloned.spec,
                 )
@@ -384,149 +441,14 @@ pub async fn fetch_and_process_engine_blobs_with_column<T: BeaconChainTypes>(
         "Fetching blobs from the EL"
     );
 
-    fetch_and_process_blobs_v2_with_column(
+    let fetch_blobs_container = FetchBlobsContainer::new_from_data_column(data_column, block_root)?;
+    fetch_and_process_blobs_v2(
         chain,
         block_root,
-        data_column,
+        fetch_blobs_container,
         versioned_hashes,
         custody_columns,
         publish_fn,
     )
     .await
-}
-
-async fn fetch_and_process_blobs_v2_with_column<T: BeaconChainTypes>(
-    chain: Arc<BeaconChain<T>>,
-    block_root: Hash256,
-    data_column: KzgVerifiedDataColumn<T::EthSpec>,
-    versioned_hashes: Vec<VersionedHash>,
-    custody_columns_indices: HashSet<ColumnIndex>,
-    publish_fn: impl Fn(BlobsOrDataColumns<T>) + Send + 'static,
-) -> Result<Option<AvailabilityProcessingStatus>, FetchEngineBlobError> {
-    let num_expected_blobs = versioned_hashes.len();
-    let execution_layer = chain
-        .execution_layer
-        .as_ref()
-        .ok_or(FetchEngineBlobError::ExecutionLayerMissing)?;
-
-    metrics::observe(&metrics::BLOBS_FROM_EL_EXPECTED, num_expected_blobs as f64);
-    debug!(num_expected_blobs, "Fetching blobs from the EL");
-    let response = execution_layer
-        .get_blobs_v2(versioned_hashes)
-        .await
-        .inspect_err(|_| {
-            inc_counter(&metrics::BLOBS_FROM_EL_ERROR_TOTAL);
-        })
-        .map_err(FetchEngineBlobError::RequestFailed)?;
-
-        let (blobs, proofs): (Vec<_>, Vec<_>) = response
-        .into_iter()
-        .filter_map(|blob_and_proof_opt| {
-            blob_and_proof_opt.map(|blob_and_proof| {
-                let BlobAndProofV2 { blob, proofs } = blob_and_proof;
-                (blob, proofs)
-            })
-        })
-        .unzip();
-
-    let num_fetched_blobs = blobs.len();
-    metrics::observe(&metrics::BLOBS_FROM_EL_RECEIVED, num_fetched_blobs as f64);
-
-    // Partial blobs response isn't useful for PeerDAS, so we don't bother building and publishing data columns.
-    if num_fetched_blobs != num_expected_blobs {
-        debug!(
-            info = "Unable to compute data columns",
-            num_fetched_blobs, num_expected_blobs, "Not all blobs fetched from the EL"
-        );
-        inc_counter(&metrics::BLOBS_FROM_EL_MISS_TOTAL);
-        return Ok(None);
-    } else {
-        inc_counter(&metrics::BLOBS_FROM_EL_HIT_TOTAL);
-    }
-
-    if chain
-        .canonical_head
-        .fork_choice_read_lock()
-        .contains_block(&block_root)
-    {
-        // Avoid computing columns if block has already been imported.
-        debug!(
-            info = "block has already been imported",
-            "Ignoring EL blobs response"
-        );
-        return Ok(None);
-    }
-
-    let custody_columns = compute_and_publish_data_columns_with_column(
-        &chain,
-        data_column.clone(),
-        blobs,
-        proofs,
-        custody_columns_indices,
-        publish_fn,
-    )
-    .await?;
-
-    debug!(num_fetched_blobs, "Processing engine blobs");
-
-    let availability_processing_status = chain
-        .process_engine_blobs(
-            data_column.to_data_column().slot(),
-            block_root,
-            EngineGetBlobsOutput::CustodyColumns(custody_columns),
-        )
-        .await
-        .map_err(FetchEngineBlobError::BlobProcessingError)?;
-
-    Ok(Some(availability_processing_status))
-}
-
-/// Offload the data column computation to a blocking task to avoid holding up the async runtime.
-async fn compute_and_publish_data_columns_with_column<T: BeaconChainTypes>(
-    chain: &Arc<BeaconChain<T>>,
-    data_column: KzgVerifiedDataColumn<T::EthSpec>,
-    blobs: Vec<Blob<T::EthSpec>>,
-    proofs: Vec<KzgProofs<T::EthSpec>>,
-    custody_columns_indices: HashSet<ColumnIndex>,
-    publish_fn: impl Fn(BlobsOrDataColumns<T>) + Send + 'static,
-) -> Result<DataColumnSidecarList<T::EthSpec>, FetchEngineBlobError> {
-    let chain_cloned = chain.clone();
-    chain
-        .spawn_blocking_handle(
-            move || {
-                let mut timer = metrics::start_timer_vec(
-                    &metrics::DATA_COLUMN_SIDECAR_COMPUTATION,
-                    &[&blobs.len().to_string()],
-                );
-
-                let blob_refs = blobs.iter().collect::<Vec<_>>();
-                let cell_proofs = proofs.into_iter().flatten().collect();
-                let data_columns_result = blobs_to_data_column_sidecars_with_column(
-                    &blob_refs,
-                    cell_proofs,
-                    data_column.as_data_column(),
-                    &chain_cloned.kzg,
-                    &chain_cloned.spec,
-                )
-                .discard_timer_on_break(&mut timer);
-                drop(timer);
-
-                // This filtering ensures we only import and publish the custody columns.
-                // `DataAvailabilityChecker` requires a strict match on custody columns count to
-                // consider a block available.
-                let custody_columns = data_columns_result
-                    .map(|mut data_columns| {
-                        data_columns.retain(|col| custody_columns_indices.contains(&col.index));
-                        data_columns
-                    })
-                    .map_err(FetchEngineBlobError::DataColumnSidecarError)?;
-
-                publish_fn(BlobsOrDataColumns::DataColumns(custody_columns.clone()));
-                Ok(custody_columns)
-            },
-            "compute_and_publish_data_columns",
-        )
-        .await
-        .map_err(FetchEngineBlobError::BeaconChainError)
-        .and_then(|r| r)
 }

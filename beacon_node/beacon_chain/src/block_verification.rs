@@ -770,7 +770,9 @@ pub fn build_blob_data_column_sidecars<T: BeaconChainTypes>(
     let sidecars = blobs_to_data_column_sidecars(
         &blob_refs,
         kzg_cell_proofs.to_vec(),
-        block,
+        block.message().body().blob_kzg_commitments()?.clone(),
+        block.message().body().kzg_commitments_merkle_proof()?,
+        block.signed_block_header(),
         &chain.kzg,
         &chain.spec,
     )

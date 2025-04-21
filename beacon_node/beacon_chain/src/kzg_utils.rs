@@ -9,8 +9,8 @@ use types::beacon_block_body::KzgCommitments;
 use types::data_column_sidecar::{Cell, DataColumn, DataColumnSidecarError};
 use types::{
     Blob, BlobSidecar, BlobSidecarList, ChainSpec, ColumnIndex, DataColumnSidecar,
-    DataColumnSidecarList, EthSpec, Hash256, KzgCommitment, KzgProof, SignedBeaconBlock,
-    SignedBeaconBlockHeader, SignedBlindedBeaconBlock,
+    DataColumnSidecarList, EthSpec, Hash256, KzgCommitment, KzgProof, SignedBeaconBlockHeader,
+    SignedBlindedBeaconBlock,
 };
 
 /// Converts a blob ssz List object to an array to be used with the kzg
@@ -177,71 +177,15 @@ pub fn verify_kzg_proof<E: EthSpec>(
 pub fn blobs_to_data_column_sidecars<E: EthSpec>(
     blobs: &[&Blob<E>],
     cell_proofs: Vec<KzgProof>,
-    block: &SignedBeaconBlock<E>,
+    kzg_commitments: KzgCommitments<E>,
+    kzg_commitments_inclusion_proof: FixedVector<Hash256, E::KzgCommitmentsInclusionProofDepth>,
+    signed_block_header: SignedBeaconBlockHeader,
     kzg: &Kzg,
     spec: &ChainSpec,
 ) -> Result<DataColumnSidecarList<E>, DataColumnSidecarError> {
     if blobs.is_empty() {
         return Ok(vec![]);
     }
-
-    let kzg_commitments = block
-        .message()
-        .body()
-        .blob_kzg_commitments()
-        .map_err(|_err| DataColumnSidecarError::PreDeneb)?;
-    let kzg_commitments_inclusion_proof = block.message().body().kzg_commitments_merkle_proof()?;
-    let signed_block_header = block.signed_block_header();
-
-    let proof_chunks = cell_proofs
-        .chunks_exact(spec.number_of_columns as usize)
-        .collect::<Vec<_>>();
-
-    // NOTE: assumes blob sidecars are ordered by index
-    let blob_cells_and_proofs_vec = blobs
-        .into_par_iter()
-        .zip(proof_chunks.into_par_iter())
-        .map(|(blob, proofs)| {
-            let blob = blob
-                .as_ref()
-                .try_into()
-                .expect("blob should have a guaranteed size due to FixedVector");
-
-            kzg.compute_cells(blob).map(|cells| {
-                (
-                    cells,
-                    proofs
-                        .try_into()
-                        .expect("proof chunks should have exactly `number_of_columns` proofs"),
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, KzgError>>()?;
-
-    build_data_column_sidecars(
-        kzg_commitments.clone(),
-        kzg_commitments_inclusion_proof,
-        signed_block_header,
-        blob_cells_and_proofs_vec,
-        spec,
-    )
-    .map_err(DataColumnSidecarError::BuildSidecarFailed)
-}
-
-pub fn blobs_to_data_column_sidecars_with_column<E: EthSpec>(
-    blobs: &[&Blob<E>],
-    cell_proofs: Vec<KzgProof>,
-    data_column: &DataColumnSidecar<E>,
-    kzg: &Kzg,
-    spec: &ChainSpec,
-) -> Result<DataColumnSidecarList<E>, DataColumnSidecarError> {
-    if blobs.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let kzg_commitments = data_column.kzg_commitments.clone();
-    let kzg_commitments_inclusion_proof = data_column.kzg_commitments_inclusion_proof.clone();
-    let signed_block_header = data_column.signed_block_header.clone();
 
     let proof_chunks = cell_proofs
         .chunks_exact(spec.number_of_columns as usize)
@@ -524,9 +468,26 @@ mod test {
         let (signed_block, blobs, proofs) =
             create_test_fulu_block_and_blobs::<E>(num_of_blobs, spec);
         let blob_refs = blobs.iter().collect::<Vec<_>>();
-        let column_sidecars =
-            blobs_to_data_column_sidecars(&blob_refs, proofs.to_vec(), &signed_block, kzg, spec)
-                .unwrap();
+        let column_sidecars = blobs_to_data_column_sidecars::<E>(
+            &blob_refs,
+            proofs.to_vec(),
+            signed_block
+                .message()
+                .body()
+                .blob_kzg_commitments()
+                .unwrap()
+                .clone(),
+            signed_block
+                .message()
+                .body()
+                .kzg_commitments_merkle_proof()
+                .unwrap()
+                .clone(),
+            signed_block.signed_block_header(),
+            kzg,
+            spec,
+        )
+        .unwrap();
         assert!(column_sidecars.is_empty());
     }
 
@@ -537,9 +498,26 @@ mod test {
             create_test_fulu_block_and_blobs::<E>(num_of_blobs, spec);
 
         let blob_refs = blobs.iter().collect::<Vec<_>>();
-        let column_sidecars =
-            blobs_to_data_column_sidecars(&blob_refs, proofs.to_vec(), &signed_block, kzg, spec)
-                .unwrap();
+        let column_sidecars = blobs_to_data_column_sidecars::<E>(
+            &blob_refs,
+            proofs.to_vec(),
+            signed_block
+                .message()
+                .body()
+                .blob_kzg_commitments()
+                .unwrap()
+                .clone(),
+            signed_block
+                .message()
+                .body()
+                .kzg_commitments_merkle_proof()
+                .unwrap()
+                .clone(),
+            signed_block.signed_block_header(),
+            kzg,
+            spec,
+        )
+        .unwrap();
 
         let block_kzg_commitments = signed_block
             .message()
@@ -576,9 +554,26 @@ mod test {
         let (signed_block, blobs, proofs) =
             create_test_fulu_block_and_blobs::<E>(num_of_blobs, spec);
         let blob_refs = blobs.iter().collect::<Vec<_>>();
-        let column_sidecars =
-            blobs_to_data_column_sidecars(&blob_refs, proofs.to_vec(), &signed_block, kzg, spec)
-                .unwrap();
+        let column_sidecars = blobs_to_data_column_sidecars::<E>(
+            &blob_refs,
+            proofs.to_vec(),
+            signed_block
+                .message()
+                .body()
+                .blob_kzg_commitments()
+                .unwrap()
+                .clone(),
+            signed_block
+                .message()
+                .body()
+                .kzg_commitments_merkle_proof()
+                .unwrap()
+                .clone(),
+            signed_block.signed_block_header(),
+            kzg,
+            spec,
+        )
+        .unwrap();
 
         // Now reconstruct
         let reconstructed_columns = reconstruct_data_columns(
@@ -599,9 +594,26 @@ mod test {
         let (signed_block, blobs, proofs) =
             create_test_fulu_block_and_blobs::<E>(num_of_blobs, spec);
         let blob_refs = blobs.iter().collect::<Vec<_>>();
-        let column_sidecars =
-            blobs_to_data_column_sidecars(&blob_refs, proofs.to_vec(), &signed_block, kzg, spec)
-                .unwrap();
+        let column_sidecars = blobs_to_data_column_sidecars::<E>(
+            &blob_refs,
+            proofs.to_vec(),
+            signed_block
+                .message()
+                .body()
+                .blob_kzg_commitments()
+                .unwrap()
+                .clone(),
+            signed_block
+                .message()
+                .body()
+                .kzg_commitments_merkle_proof()
+                .unwrap()
+                .clone(),
+            signed_block.signed_block_header(),
+            kzg,
+            spec,
+        )
+        .unwrap();
 
         // Now reconstruct
         let signed_blinded_block = signed_block.into();

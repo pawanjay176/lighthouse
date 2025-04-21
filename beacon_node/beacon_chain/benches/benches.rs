@@ -40,10 +40,22 @@ fn all_benches(c: &mut Criterion) {
     for blob_count in [1, 2, 3, 6] {
         let (signed_block, blobs, proofs) = create_test_block_and_blobs::<E>(blob_count, &spec);
 
-        let column_sidecars = blobs_to_data_column_sidecars(
+        let column_sidecars = blobs_to_data_column_sidecars::<E>(
             &blobs.iter().collect::<Vec<_>>(),
             proofs.to_vec(),
-            &signed_block,
+            signed_block
+                .message()
+                .body()
+                .blob_kzg_commitments()
+                .unwrap()
+                .clone(),
+            signed_block
+                .message()
+                .body()
+                .kzg_commitments_merkle_proof()
+                .unwrap()
+                .clone(),
+            signed_block.signed_block_header(),
             &kzg,
             &spec,
         )
