@@ -1275,7 +1275,6 @@ impl<T: BeaconChainTypes> SyncManager<T> {
     ) {
         if let Some(resp) = self.network.range_block_component_response(
             range_request_id,
-            peer_id,
             range_block_component,
         ) {
             match resp {

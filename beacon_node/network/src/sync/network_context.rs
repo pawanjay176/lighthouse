@@ -536,8 +536,12 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             })
             .transpose()?;
 
-        let info =
-            RangeBlockComponentsRequest::new(blocks_req_id, blobs_req_id, data_column_requests);
+        let info = RangeBlockComponentsRequest::new(
+            blocks_req_id,
+            blobs_req_id,
+            data_column_requests,
+            block_peer,
+        );
         self.components_by_range_requests.insert(id, info);
 
         Ok(id.id)
@@ -605,7 +609,6 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     pub fn range_block_component_response(
         &mut self,
         id: ComponentsByRangeRequestId,
-        peer_id: PeerId,
         range_block_component: RangeBlockComponent<T::EthSpec>,
     ) -> Option<Result<(Vec<RpcBlock<T::EthSpec>>, BatchPeers), RpcResponseError>> {
         let Entry::Occupied(mut entry) = self.components_by_range_requests.entry(id) else {
@@ -618,18 +621,18 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             match range_block_component {
                 RangeBlockComponent::Block(req_id, resp) => resp.and_then(|(blocks, _)| {
                     request
-                        .add_blocks(req_id, blocks, peer_id)
+                        .add_blocks(req_id, blocks)
                         .map_err(RpcResponseError::BlockComponentCouplingError)
                 }),
                 RangeBlockComponent::Blob(req_id, resp) => resp.and_then(|(blobs, _)| {
                     request
-                        .add_blobs(req_id, blobs, peer_id)
+                        .add_blobs(req_id, blobs)
                         .map_err(RpcResponseError::BlockComponentCouplingError)
                 }),
                 RangeBlockComponent::CustodyColumns(req_id, resp) => {
                     resp.and_then(|(custody_columns, _)| {
                         request
-                            .add_custody_columns(req_id, custody_columns, peer_id)
+                            .add_custody_columns(req_id, custody_columns)
                             .map_err(RpcResponseError::BlockComponentCouplingError)
                     })
                 }
@@ -639,7 +642,9 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             return Some(Err(e));
         }
 
-        if let Some(blocks_result) = entry.get().responses(&self.chain.spec) {
+        let block_peer = entry.get().block_peer();
+
+        if let Some(blocks_result) = entry.get().responses(block_peer, &self.chain.spec) {
             entry.remove();
             // If the request is finished, dequeue everything
             Some(blocks_result.map_err(RpcResponseError::BlockComponentCouplingError))
