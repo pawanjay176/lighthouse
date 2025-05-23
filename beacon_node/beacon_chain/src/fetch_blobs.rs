@@ -212,13 +212,17 @@ async fn fetch_and_process_blobs_v2<T: BeaconChainTypes>(
         })
         .map_err(FetchEngineBlobError::RequestFailed)?;
 
-    let (blobs, proofs): (Vec<_>, Vec<_>) = response
+    let Some(blobs_and_proofs) = response else {
+        debug!(num_expected_blobs, "No blobs fetched from the EL");
+        inc_counter(&metrics::BLOBS_FROM_EL_MISS_TOTAL);
+        return Ok(None);
+    };
+
+    let (blobs, proofs): (Vec<_>, Vec<_>) = blobs_and_proofs
         .into_iter()
-        .filter_map(|blob_and_proof_opt| {
-            blob_and_proof_opt.map(|blob_and_proof| {
-                let BlobAndProofV2 { blob, proofs } = blob_and_proof;
-                (blob, proofs)
-            })
+        .map(|blob_and_proof| {
+            let BlobAndProofV2 { blob, proofs } = blob_and_proof;
+            (blob, proofs)
         })
         .unzip();
 
@@ -362,4 +366,147 @@ fn build_blob_sidecars<E: EthSpec>(
         }
     }
     Ok(fixed_blob_sidecar_list)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::fetch_blobs::{fetch_and_process_engine_blobs, BlobsOrDataColumns};
+    use crate::test_utils::{BeaconChainHarness, EphemeralHarnessType};
+    use crate::AvailabilityProcessingStatus;
+    use bls::Signature;
+    use eth2::types::BlobsBundle;
+    use execution_layer::json_structures::BlobAndProofV2;
+    use execution_layer::test_utils::generate_blobs;
+    use maplit::hashset;
+    use std::sync::Arc;
+    use types::{
+        BeaconBlockFulu, EmptyBlock, EthSpec, ForkName, MainnetEthSpec, SignedBeaconBlock,
+        SignedBeaconBlockFulu, Slot,
+    };
+
+    type E = MainnetEthSpec;
+    type T = EphemeralHarnessType<E>;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_fetch_blobs_v2_no_blobs_in_block() {
+        let harness = harness();
+        let block = SignedBeaconBlock::<E>::Fulu(SignedBeaconBlockFulu {
+            message: BeaconBlockFulu::empty(&harness.spec),
+            signature: Signature::empty(),
+        });
+        let block_root = block.canonical_root();
+
+        let custody_columns = hashset![0, 1, 2];
+        let processing_status = fetch_and_process_engine_blobs(
+            harness.chain.clone(),
+            block_root,
+            Arc::new(block),
+            custody_columns.clone(),
+            |_| {},
+        )
+        .await
+        .expect("fetch blobs should succeed");
+
+        assert_eq!(processing_status, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_fetch_blobs_v2_no_blobs_returned() {
+        let harness = harness();
+        let (block, _blobs_and_proofs) = create_test_block_and_blobs(&harness).await;
+        let block_root = block.canonical_root();
+
+        // Trigger fetch blobs on the block
+        let custody_columns = hashset![0, 1, 2];
+        let processing_status = fetch_and_process_engine_blobs(
+            harness.chain.clone(),
+            block_root,
+            block,
+            custody_columns.clone(),
+            |_| {},
+        )
+        .await
+        .expect("fetch blobs should succeed");
+
+        assert_eq!(processing_status, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_fetch_blobs_v2_success() {
+        let harness = harness();
+        let (block, _) = create_test_block_and_blobs(&harness).await;
+        let block_root = block.canonical_root();
+
+        harness
+            .chain
+            .verify_block_for_gossip(block.clone(), 8)
+            .await
+            .unwrap();
+
+        // Trigger fetch blobs on the block
+        let custody_columns = hashset![0, 1, 2, 3, 4, 5, 6, 7, 8];
+        let processing_status = fetch_and_process_engine_blobs(
+            harness.chain.clone(),
+            block_root,
+            block,
+            custody_columns.clone(),
+            move |sidecars| match sidecars {
+                BlobsOrDataColumns::DataColumns(columns) => {
+                    assert_eq!(columns.len(), custody_columns.len())
+                }
+                _ => panic!("unexpected"),
+            },
+        )
+        .await
+        .expect("fetch blobs should succeed");
+
+        assert_eq!(
+            processing_status,
+            Some(AvailabilityProcessingStatus::Imported(block_root))
+        );
+    }
+
+    async fn create_test_block_and_blobs(
+        harness: &BeaconChainHarness<T>,
+    ) -> (Arc<SignedBeaconBlock<E>>, Vec<BlobAndProofV2<E>>) {
+        let (blobs_bundle, _tx) = generate_blobs::<E>(2, ForkName::Fulu).unwrap();
+        let BlobsBundle {
+            commitments,
+            proofs,
+            blobs,
+        } = blobs_bundle;
+
+        let state = harness.get_current_state();
+        harness.advance_slot();
+        let ((block, _), _) = harness
+            .make_block_with_modifier(state, Slot::new(1), |block| {
+                *block.body_mut().blob_kzg_commitments_mut().unwrap() = commitments;
+            })
+            .await;
+
+        let proofs_len = proofs.len() / blobs.len();
+        let blob_and_proofs: Vec<BlobAndProofV2<E>> = blobs
+            .into_iter()
+            .zip(proofs.chunks(proofs_len))
+            .map(|(blob, proofs)| BlobAndProofV2 {
+                blob,
+                proofs: proofs.to_vec().into(),
+            })
+            .collect();
+        (block, blob_and_proofs)
+    }
+
+    fn harness() -> BeaconChainHarness<T> {
+        let spec = ForkName::Fulu.make_genesis_spec(E::default_spec());
+        let validator_count = 1;
+        // Set up a minimal beacon chain - we don't need a real chain for this test.
+        let harness = BeaconChainHarness::builder(E::default())
+            .spec(Arc::new(spec))
+            .deterministic_keypairs(validator_count)
+            .fresh_ephemeral_store()
+            .mock_execution_layer()
+            .build();
+        harness
+    }
 }

@@ -1,6 +1,7 @@
 use crate::engine_api::{
     json_structures::{
-        JsonForkchoiceUpdatedV1Response, JsonPayloadStatusV1, JsonPayloadStatusV1Status,
+        BlobAndProofV2, JsonForkchoiceUpdatedV1Response, JsonPayloadStatusV1,
+        JsonPayloadStatusV1Status,
     },
     ExecutionBlock, PayloadAttributes, PayloadId, PayloadStatusV1, PayloadStatusV1Status,
 };
@@ -154,6 +155,10 @@ pub struct ExecutionBlockGenerator<E: EthSpec> {
      */
     pub blobs_bundles: HashMap<PayloadId, BlobsBundle<E>>,
     pub kzg: Option<Arc<Kzg>>,
+    /*
+     * fulu stuff
+     */
+    pub mempool_blobs: HashMap<Hash256, BlobAndProofV2<E>>,
     rng: Arc<Mutex<StdRng>>,
     spec: Arc<ChainSpec>,
 }
@@ -177,6 +182,29 @@ impl<E: EthSpec> ExecutionBlockGenerator<E> {
         spec: Arc<ChainSpec>,
         kzg: Option<Arc<Kzg>>,
     ) -> Self {
+        let (blobs_bundle, _tx) = generate_blobs::<E>(2, ForkName::Fulu).unwrap();
+        let BlobsBundle {
+            commitments,
+            proofs,
+            blobs,
+        } = blobs_bundle;
+
+        let proofs_len = proofs.len() / blobs.len();
+        let mempool_blobs: HashMap<Hash256, BlobAndProofV2<E>> = blobs
+            .into_iter()
+            .zip(proofs.chunks(proofs_len))
+            .zip(commitments)
+            .map(|((blob, proofs), commitment)| {
+                (
+                    commitment.calculate_versioned_hash(),
+                    BlobAndProofV2 {
+                        blob,
+                        proofs: proofs.to_vec().into(),
+                    },
+                )
+            })
+            .collect();
+
         let mut gen = Self {
             head_block: <_>::default(),
             finalized_block_hash: <_>::default(),
@@ -194,6 +222,7 @@ impl<E: EthSpec> ExecutionBlockGenerator<E> {
             osaka_time,
             blobs_bundles: <_>::default(),
             kzg,
+            mempool_blobs,
             rng: make_rng(),
             spec,
         };
@@ -218,6 +247,20 @@ impl<E: EthSpec> ExecutionBlockGenerator<E> {
         } else {
             None
         }
+    }
+
+    pub fn get_blobs_by_versioned_hash_v2(
+        &self,
+        hashes: &[Hash256],
+    ) -> Option<Vec<BlobAndProofV2<E>>> {
+        let mut resp = Vec::new();
+        for hash in hashes {
+            let Some(blobs_and_proofs) = self.mempool_blobs.get(hash) else {
+                return None;
+            };
+            resp.push(blobs_and_proofs.clone());
+        }
+        Some(resp)
     }
 
     pub fn genesis_execution_block(&self) -> Option<ExecutionBlock> {

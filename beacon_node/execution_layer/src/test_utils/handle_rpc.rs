@@ -669,6 +669,20 @@ pub async fn handle_rpc<E: EthSpec>(
 
             Ok(serde_json::to_value(response).unwrap())
         }
+        ENGINE_GET_BLOBS_V2 => {
+            use tracing::debug;
+            let versioned_hashes =
+                get_param::<Vec<Hash256>>(params, 0).map_err(|s| (s, BAD_PARAMS_ERROR_CODE))?;
+            debug!(
+                hashes=?versioned_hashes,
+                "Got request"
+            );
+            let blobs_bundle = ctx
+                .execution_block_generator
+                .read()
+                .get_blobs_by_versioned_hash_v2(&versioned_hashes);
+            Ok(serde_json::to_value(blobs_bundle).unwrap())
+        }
         other => Err((
             format!("The method {} does not exist/is not available", other),
             METHOD_NOT_FOUND_CODE,
