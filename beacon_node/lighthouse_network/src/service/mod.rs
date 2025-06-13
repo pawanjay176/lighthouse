@@ -281,6 +281,21 @@ impl<E: EthSpec> Network<E> {
             // Set up a scoring update interval
             let update_gossipsub_scores = tokio::time::interval(params.decay_interval);
 
+            let current_digest_epoch = ctx.fork_context.digest_epoch();
+            let current_and_future_digests = ctx.chain_spec
+                .all_digest_epochs()
+                .filter_map(|digest_epoch| {
+                    if digest_epoch >= current_digest_epoch {
+                        Some((
+                            digest_epoch,
+                            ctx.fork_context.context_bytes(digest_epoch)
+                        ))
+                    } else {
+                        None
+                    }
+                });
+
+                /*
             let current_and_future_forks = ForkName::list_all().into_iter().filter_map(|fork| {
                 if fork >= ctx.fork_context.current_fork() {
                     ctx.fork_context
@@ -290,7 +305,25 @@ impl<E: EthSpec> Network<E> {
                     None
                 }
             });
+            */
 
+            let all_topics_for_digests = current_and_future_digests
+                .map(|(epoch, digest)| {
+                    let fork = ctx.chain_spec.fork_name_at_epoch(epoch);
+                    all_topics_at_fork::<E>(fork, &ctx.chain_spec)
+                        .into_iter()
+                        .map(|topic| {
+                            Topic::new(GossipTopic::new(
+                                topic,
+                                GossipEncoding::default(),
+                                digest,
+                            ))
+                            .into()
+                        })
+                        .collect::<Vec<TopicHash>>()
+                })
+                .collect::<Vec<_>>();
+/*
             let all_topics_for_forks = current_and_future_forks
                 .map(|(fork, fork_digest)| {
                     all_topics_at_fork::<E>(fork, &ctx.chain_spec)
@@ -306,10 +339,11 @@ impl<E: EthSpec> Network<E> {
                         .collect::<Vec<TopicHash>>()
                 })
                 .collect::<Vec<_>>();
+*/
 
             // For simplicity find the fork with the most individual topics and assume all forks
             // have the same topic count
-            let max_topics_at_any_fork = all_topics_for_forks
+            let max_topics_at_any_fork = all_topics_for_digests
                 .iter()
                 .map(|topics| topics.len())
                 .max()
@@ -360,7 +394,7 @@ impl<E: EthSpec> Network<E> {
             // If we are using metrics, then register which topics we want to make sure to keep
             // track of
             if ctx.libp2p_registry.is_some() {
-                for topics in all_topics_for_forks {
+                for topics in all_topics_for_digests {
                     gossipsub.register_topics_for_metrics(topics);
                 }
             }

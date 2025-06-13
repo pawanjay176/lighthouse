@@ -2,11 +2,11 @@ use crate::application_domain::{ApplicationDomain, APPLICATION_DOMAIN_BUILDER};
 use crate::blob_sidecar::BlobIdentifier;
 use crate::data_column_sidecar::DataColumnsByRootIdentifier;
 use crate::*;
+use ethereum_hashing::hash;
 use int_to_bytes::int_to_bytes4;
 use safe_arith::{ArithError, SafeArith};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_utils::quoted_u64::MaybeQuoted;
-use sha2::Sha256;
 use ssz::Encode;
 use std::fs::File;
 use std::path::Path;
@@ -548,7 +548,7 @@ impl ChainSpec {
     ///
     /// This is a digest primarily used for domain separation on the p2p layer.
     /// 4-bytes suffices for practical separation of forks/chains.
-    pub fn compute_fork_digest(self, genesis_validators_root: Hash256, epoch: Epoch) -> [u8; 4] {
+    pub fn compute_fork_digest(&self, genesis_validators_root: Hash256, epoch: Epoch) -> [u8; 4] {
         let fork_version = self.fork_version_for_epoch(epoch);
         let mut base_digest = [0u8; 4];
         let root = Self::compute_fork_data_root(fork_version, genesis_validators_root);
@@ -570,7 +570,7 @@ impl ChainSpec {
                 input.extend_from_slice(&blob_parameters.max_blobs_per_block.to_be_bytes());
 
                 // Hash the concatenated bytes
-                let hash = Sha256::digest(input);
+                let hash = hash(&input);
 
                 // XOR the base digest with the first 4 bytes of the hash
                 let mut masked_digest = [0u8; 4];
@@ -583,17 +583,39 @@ impl ChainSpec {
         }
     }
 
-    pub fn all_digest_epochs(&self) -> Iter<Epoch> {
+    pub fn all_digest_epochs(&self) -> impl std::iter::Iterator<Item = Epoch> {
         let mut relevant_epochs = ForkName::list_all_fork_epochs(self)
+            .into_iter()
             .filter_map(|(_, epoch)| epoch)
-            .collect::<HashSet<_>>();
+            .collect::<std::collections::HashSet<_>>();
 
         if self.fulu_fork_epoch.is_some() {
-            for blob_parameters in self.blob_schedule {
+            for blob_parameters in &self.blob_schedule {
                 relevant_epochs.insert(blob_parameters.epoch);
             }
         }
-        relevant_epochs.iter().sorted()
+        let mut vec = relevant_epochs
+            .into_iter()
+            .collect::<Vec<_>>();
+        vec.sort();
+        vec.into_iter()
+    }
+
+    pub fn next_digest_epoch(&self, epoch: Epoch) -> Option<Epoch> {
+        match self.fulu_fork_epoch {
+            Some(fulu_epoch) if epoch >= fulu_epoch => {
+                self.all_digest_epochs()
+                    .find(|digest_epoch| *digest_epoch > epoch)
+            },
+            _ => {
+                self.fork_name_at_epoch(epoch)
+                    .next_fork()
+                    .and_then(|fork_name| {
+                        self.fork_epoch(fork_name)
+                    })
+                
+            }
+        }
     }
 
     /// Compute a domain by applying the given `fork_version`.
