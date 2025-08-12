@@ -82,6 +82,9 @@ use types::{
 /// blocks for.
 pub const SLOT_IMPORT_TOLERANCE: usize = 32;
 
+/// The number of slots close to wall clock slot at which we start backfill syncing.
+pub const BACKFILL_SLOT_TOLERANCE: u64 = 5;
+
 /// Suppress duplicated `UnknownBlockHashFromAttestation` events for some duration of time. In
 /// practice peers are likely to send the same root during a single slot. 30 seconds is a rather
 /// arbitrary number that covers a full slot, but allows recovery if sync get stuck for a few slots.
@@ -604,7 +607,14 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                     // If we would otherwise be synced, first check if we need to perform or
                     // complete a backfill sync.
                     #[cfg(not(feature = "disable-backfill"))]
-                    if matches!(sync_state, SyncState::Synced) {
+                    if matches!(sync_state, SyncState::Synced)
+                        && self
+                            .chain
+                            .slot()
+                            .unwrap_or_else(|_| Slot::new(0))
+                            .saturating_sub(self.chain.best_slot())
+                            <= BACKFILL_SLOT_TOLERANCE
+                    {
                         // Determine if we need to start/resume/restart a backfill sync.
                         match self.backfill_sync.start(&mut self.network) {
                             Ok(SyncStart::Syncing {
@@ -621,6 +631,10 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                                 error!(error = ?e, "Backfill sync failed to start");
                             }
                         }
+                    } else {
+                        // If there is a backfill sync in progress pause it.
+                        #[cfg(not(feature = "disable-backfill"))]
+                        self.backfill_sync.pause();
                     }
 
                     // Return the sync state if backfilling is not required.
