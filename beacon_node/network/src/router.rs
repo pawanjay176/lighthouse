@@ -56,13 +56,13 @@ pub enum RouterMessage<E: EthSpec> {
     /// An RPC response has been received.
     RPCResponseReceived {
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<E>,
         response: Response<E>,
     },
     /// An RPC request failed
     RPCFailed {
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<E>,
         error: RPCError,
     },
     /// A gossip message has been received. The fields are: message id, the peer that sent us this
@@ -280,7 +280,7 @@ impl<T: BeaconChainTypes> Router<T> {
     fn handle_rpc_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         response: Response<T::EthSpec>,
     ) {
         match response {
@@ -507,7 +507,7 @@ impl<T: BeaconChainTypes> Router<T> {
 
     /// An error occurred during an RPC request. The state is maintained by the sync manager, so
     /// this function notifies the sync manager of the error.
-    pub fn on_rpc_error(&mut self, peer_id: PeerId, app_request_id: AppRequestId, error: RPCError) {
+    pub fn on_rpc_error(&mut self, peer_id: PeerId, app_request_id: AppRequestId<T::EthSpec>, error: RPCError) {
         // Check if the failed RPC belongs to sync
         if let AppRequestId::Sync(sync_request_id) = app_request_id {
             self.send_to_sync(SyncMessage::RpcError {
@@ -547,7 +547,7 @@ impl<T: BeaconChainTypes> Router<T> {
     pub fn on_blocks_by_range_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         beacon_block: Option<Arc<SignedBeaconBlock<T::EthSpec>>>,
     ) {
         let sync_request_id = match app_request_id {
@@ -562,6 +562,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All BBRange requests belong to sync");
                 return;
             }
+            AppRequestId::Http(_) => unreachable!("handled in network"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -582,7 +583,7 @@ impl<T: BeaconChainTypes> Router<T> {
     pub fn on_blobs_by_range_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         blob_sidecar: Option<Arc<BlobSidecar<T::EthSpec>>>,
     ) {
         trace!(
@@ -606,7 +607,7 @@ impl<T: BeaconChainTypes> Router<T> {
     pub fn on_blocks_by_root_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         beacon_block: Option<Arc<SignedBeaconBlock<T::EthSpec>>>,
     ) {
         let sync_request_id = match app_request_id {
@@ -621,6 +622,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All BBRoot requests belong to sync");
                 return;
             }
+            AppRequestId::Http(_) => unreachable!("handled in network"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -640,7 +642,7 @@ impl<T: BeaconChainTypes> Router<T> {
     pub fn on_blobs_by_root_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         blob_sidecar: Option<Arc<BlobSidecar<T::EthSpec>>>,
     ) {
         let sync_request_id = match app_request_id {
@@ -655,6 +657,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All BlobsByRoot requests belong to sync");
                 return;
             }
+            AppRequestId::Http(_) => unreachable!("handled in network"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -674,7 +677,7 @@ impl<T: BeaconChainTypes> Router<T> {
     pub fn on_data_columns_by_root_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         data_column: Option<Arc<DataColumnSidecar<T::EthSpec>>>,
     ) {
         let sync_request_id = match app_request_id {
@@ -689,6 +692,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All DataColumnsByRoot requests belong to sync");
                 return;
             }
+            AppRequestId::Http(_) => unreachable!("handled in network"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -707,7 +711,7 @@ impl<T: BeaconChainTypes> Router<T> {
     pub fn on_data_columns_by_range_response(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<T::EthSpec>,
         data_column: Option<Arc<DataColumnSidecar<T::EthSpec>>>,
     ) {
         trace!(

@@ -104,12 +104,12 @@ fn test_tcp_status_rpc() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
                         peer_id: _,
-                        app_request_id: AppRequestId::Router,
+                        app_request_id: AppRequestId::<MainnetEthSpec>::Router,
                         response,
                     } => {
                         // Should receive the RPC response
@@ -218,7 +218,7 @@ fn test_tcp_blocks_by_range_chunked_rpc() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
@@ -359,7 +359,7 @@ fn test_blobs_by_range_chunked_rpc() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
@@ -483,12 +483,12 @@ fn test_tcp_blocks_by_range_over_limit() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     // The request will fail because the sender will refuse to send anything > MAX_RPC_SIZE
                     NetworkEvent::RPCFailed { app_request_id, .. } => {
-                        assert!(matches!(app_request_id, AppRequestId::Router));
+                        assert!(matches!(app_request_id, AppRequestId::<MainnetEthSpec>::Router));
                         return;
                     }
                     _ => {} // Ignore other behaviour events
@@ -591,7 +591,7 @@ fn test_tcp_blocks_by_range_chunked_rpc_terminates_correctly() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
@@ -728,12 +728,12 @@ fn test_tcp_blocks_by_range_single_empty_rpc() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
                         peer_id: _,
-                        app_request_id: AppRequestId::Router,
+                        app_request_id: AppRequestId::<MainnetEthSpec>::Router,
                         response,
                     } => match response {
                         Response::BlocksByRange(Some(_)) => {
@@ -869,12 +869,12 @@ fn test_tcp_blocks_by_root_chunked_rpc() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
                         peer_id: _,
-                        app_request_id: AppRequestId::Router,
+                        app_request_id: AppRequestId::<MainnetEthSpec>::Router,
                         response,
                     } => match response {
                         Response::BlocksByRoot(Some(_)) => {
@@ -1040,12 +1040,12 @@ fn test_tcp_columns_by_root_chunked_rpc() {
                         tracing::info!("Sending RPC");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
                         peer_id: _,
-                        app_request_id: AppRequestId::Router,
+                        app_request_id: AppRequestId::<MainnetEthSpec>::Router,
                         response,
                     } => match response {
                         Response::DataColumnsByRoot(Some(sidecar)) => {
@@ -1181,12 +1181,12 @@ fn test_tcp_columns_by_range_chunked_rpc() {
                     NetworkEvent::PeerConnectedOutgoing(peer_id) => {
                         tracing::info!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
                         peer_id: _,
-                        app_request_id: AppRequestId::Router,
+                        app_request_id: AppRequestId::<MainnetEthSpec>::Router,
                         response,
                     } => match response {
                         Response::DataColumnsByRange(Some(sidecar)) => {
@@ -1316,12 +1316,12 @@ fn test_tcp_blocks_by_root_chunked_rpc_terminates_correctly() {
                         // Send a STATUS message
                         debug!("Sending RPC");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                     }
                     NetworkEvent::ResponseReceived {
                         peer_id: _,
-                        app_request_id: AppRequestId::Router,
+                        app_request_id: AppRequestId::<MainnetEthSpec>::Router,
                         response,
                     } => {
                         debug!("Sender received a response");
@@ -1540,7 +1540,7 @@ fn test_delayed_rpc_response() {
                     NetworkEvent::PeerConnectedOutgoing(peer_id) => {
                         debug!(%request_id, "Sending RPC request");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                         request_sent_at = Instant::now();
                     }
@@ -1579,7 +1579,7 @@ fn test_delayed_rpc_response() {
                         request_id += 1;
                         debug!(%request_id, "Sending RPC request");
                         sender
-                            .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                            .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                             .unwrap();
                         request_sent_at = Instant::now();
                     }
@@ -1676,7 +1676,7 @@ fn test_active_requests() {
                         // Send requests in quick succession to intentionally trigger request queueing in the self-limiter.
                         for _ in 0..REQUESTS {
                             sender
-                                .send_request(peer_id, AppRequestId::Router, rpc_request.clone())
+                                .send_request(peer_id, AppRequestId::<MainnetEthSpec>::Router, rpc_request.clone())
                                 .unwrap();
                         }
                     }

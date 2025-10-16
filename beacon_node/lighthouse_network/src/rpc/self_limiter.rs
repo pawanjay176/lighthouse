@@ -203,7 +203,7 @@ impl<Id: ReqId, E: EthSpec> SelfRateLimiter<Id, E> {
                     &mut self.active_requests,
                     &mut self.rate_limiter,
                     peer_id,
-                    request_id,
+                    request_id.clone(),
                     req.clone(),
                 ) {
                     Err((_rate_limited_req, wait_time)) => {
@@ -212,7 +212,7 @@ impl<Id: ReqId, E: EthSpec> SelfRateLimiter<Id, E> {
                         // Don't push `rate_limited_req` here to prevent `queued_at` from being updated.
                         queued_requests.push_front(QueuedRequest {
                             req,
-                            request_id,
+                            request_id: request_id.clone(),
                             queued_at,
                         });
                         // If one fails just wait for the next window that allows sending requests.
@@ -243,7 +243,7 @@ impl<Id: ReqId, E: EthSpec> SelfRateLimiter<Id, E> {
                     // NOTE: Currently cannot remove entries from the DelayQueue, we will just let
                     // them expire and ignore them.
                     for message in queue {
-                        failed_requests.push((message.request_id, *protocol))
+                        failed_requests.push((message.request_id.clone(), *protocol))
                     }
                     // Remove the entry
                     false
@@ -332,7 +332,7 @@ mod tests {
             Hash256::ZERO,
             &MainnetEthSpec::default_spec(),
         ));
-        let mut limiter: SelfRateLimiter<AppRequestId, MainnetEthSpec> =
+        let mut limiter: SelfRateLimiter<AppRequestId<MainnetEthSpec>, MainnetEthSpec> =
             SelfRateLimiter::new(Some(config), fork_context).unwrap();
         let peer_id = PeerId::random();
         let lookup_id = 0;
@@ -340,7 +340,7 @@ mod tests {
         for i in 1..=5u32 {
             let _ = limiter.allows(
                 peer_id,
-                AppRequestId::Sync(SyncRequestId::SingleBlock {
+                AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                     id: SingleLookupReqId {
                         lookup_id,
                         req_id: i,
@@ -362,7 +362,7 @@ mod tests {
             for i in 2..=5u32 {
                 assert!(matches!(
                     iter.next().unwrap().request_id,
-                    AppRequestId::Sync(SyncRequestId::SingleBlock {
+                    AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                         id: SingleLookupReqId { req_id, .. },
                     }) if req_id == i,
                 ));
@@ -387,7 +387,7 @@ mod tests {
             for i in 3..=5 {
                 assert!(matches!(
                     iter.next().unwrap().request_id,
-                    AppRequestId::Sync(SyncRequestId::SingleBlock {
+                    AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                         id: SingleLookupReqId { req_id, .. },
                     }) if req_id == i,
                 ));
@@ -405,14 +405,14 @@ mod tests {
             Hash256::ZERO,
             &MainnetEthSpec::default_spec(),
         ));
-        let mut limiter: SelfRateLimiter<AppRequestId, MainnetEthSpec> =
+        let mut limiter: SelfRateLimiter<AppRequestId<MainnetEthSpec>, MainnetEthSpec> =
             SelfRateLimiter::new(None, fork_context).unwrap();
         let peer_id = PeerId::random();
 
         for i in 1..=5u32 {
             let result = limiter.allows(
                 peer_id,
-                AppRequestId::Sync(SyncRequestId::SingleBlock {
+                AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                     id: SingleLookupReqId {
                         lookup_id: i,
                         req_id: i,
@@ -468,7 +468,7 @@ mod tests {
 
             assert!(matches!(
                 request_id,
-                AppRequestId::Sync(SyncRequestId::SingleBlock {
+                AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                     id: SingleLookupReqId { req_id, .. },
                 }) if *req_id == i
             ));
@@ -482,7 +482,7 @@ mod tests {
             Hash256::ZERO,
             &MainnetEthSpec::default_spec(),
         ));
-        let mut limiter: SelfRateLimiter<AppRequestId, MainnetEthSpec> =
+        let mut limiter: SelfRateLimiter<AppRequestId<MainnetEthSpec>, MainnetEthSpec> =
             SelfRateLimiter::new(None, fork_context).unwrap();
         let peer1 = PeerId::random();
         let peer2 = PeerId::random();
@@ -491,7 +491,7 @@ mod tests {
             for i in 1..=5u32 {
                 let result = limiter.allows(
                     peer,
-                    AppRequestId::Sync(SyncRequestId::SingleBlock {
+                    AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                         id: SingleLookupReqId {
                             lookup_id: i,
                             req_id: i,
@@ -528,7 +528,7 @@ mod tests {
             let (request_id, _) = failed_requests.remove(0);
             assert!(matches!(
                 request_id,
-                AppRequestId::Sync(SyncRequestId::SingleBlock {
+                AppRequestId::<MainnetEthSpec>::Sync(SyncRequestId::SingleBlock {
                         id: SingleLookupReqId { req_id, .. },
                 }) if req_id == i
             ));

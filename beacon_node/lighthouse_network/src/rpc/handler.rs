@@ -677,7 +677,7 @@ where
                         .push(HandlerEvent::Err(HandlerErr::Outbound {
                             error: RPCError::Disconnected,
                             proto: entry.get().proto,
-                            id: entry.get().req_id,
+                            id: entry.get().req_id.clone(),
                         }))
                 }
                 OutboundSubstreamState::RequestPendingResponse {
@@ -714,7 +714,7 @@ where
                         }
 
                         // Check what type of response we got and report it accordingly
-                        let id = entry.get().req_id;
+                        let id = entry.get().req_id.clone();
                         let proto = entry.get().proto;
 
                         let received = match response {
@@ -742,7 +742,7 @@ where
                         //"RPC Response - stream closed by remote");
                         // drop the stream
                         let delay_key = &entry.get().delay_key;
-                        let request_id = entry.get().req_id;
+                        let request_id = entry.get().req_id.clone();
                         self.outbound_substreams_delay.remove(delay_key);
                         entry.remove_entry();
                         // notify the application error
@@ -774,7 +774,7 @@ where
                         let delay_key = &entry.get().delay_key;
                         self.outbound_substreams_delay.remove(delay_key);
                         let outbound_err = HandlerErr::Outbound {
-                            id: entry.get().req_id,
+                            id: entry.get().req_id.clone(),
                             proto: entry.get().proto,
                             error: e,
                         };
@@ -790,7 +790,7 @@ where
                             // drop the stream and its corresponding timeout
                             let delay_key = &entry.get().delay_key;
                             let protocol = entry.get().proto;
-                            let request_id = entry.get().req_id;
+                            let request_id = entry.get().req_id.clone();
                             self.outbound_substreams_delay.remove(delay_key);
                             entry.remove_entry();
 
@@ -1014,7 +1014,7 @@ where
                 .push(HandlerEvent::Err(HandlerErr::Outbound {
                     error: RPCError::Disconnected,
                     proto,
-                    id,
+                    id: id.clone(),
                 }));
         }
 
@@ -1047,7 +1047,7 @@ where
                         delay_key,
                         proto,
                         max_remaining_chunks,
-                        req_id: id,
+                        req_id: id.clone(),
                     },
                 )
                 .is_some()
