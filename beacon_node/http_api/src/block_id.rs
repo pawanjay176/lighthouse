@@ -5,14 +5,20 @@ use beacon_chain::{BeaconChain, BeaconChainError, BeaconChainTypes, WhenSlotSkip
 use eth2::types::BlockId as CoreBlockId;
 use eth2::types::DataColumnIndicesQuery;
 use eth2::types::{BlobIndicesQuery, BlobWrapper, BlobsVersionedHashesQuery};
+use lighthouse_network::NetworkGlobals;
+use lighthouse_network::rpc::RequestType;
+use lighthouse_network::service::api_types::Response as RpcResponse;
+use network::NetworkMessage;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use types::{
     BlobSidecarList, DataColumnSidecarList, EthSpec, FixedBytesExtended, ForkName, Hash256,
     SignedBeaconBlock, SignedBlindedBeaconBlock, Slot, UnversionedResponse,
     beacon_response::ExecutionOptimisticFinalizedMetadata,
 };
+use types::{DataColumnsByRootIdentifier, RuntimeVariableList};
 use warp::Rejection;
 
 /// Wraps `eth2::types::BlockId` and provides a simple way to obtain a block or root for a given
@@ -312,10 +318,12 @@ impl BlockId {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn get_blinded_block_and_blob_list_filtered<T: BeaconChainTypes>(
+    pub async fn get_blinded_block_and_blob_list_filtered<T: BeaconChainTypes>(
         &self,
         query: BlobIndicesQuery,
         chain: &BeaconChain<T>,
+        network_globals: Arc<NetworkGlobals<T::EthSpec>>,
+        network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
     ) -> Result<
         (
             SignedBlindedBeaconBlock<T::EthSpec>,
@@ -341,7 +349,15 @@ impl BlockId {
         let max_blobs_per_block = chain.spec.max_blobs_per_block(block.epoch()) as usize;
         let blob_sidecar_list = if !blob_kzg_commitments.is_empty() {
             if chain.spec.is_peer_das_enabled_for_epoch(block.epoch()) {
-                Self::get_blobs_from_data_columns(chain, root, query.indices, &block)?
+                Self::get_blobs_from_data_columns(
+                    chain,
+                    root,
+                    query.indices,
+                    &block,
+                    network_globals,
+                    network_tx,
+                )
+                .await?
             } else {
                 Self::get_blobs(chain, root, query.indices, max_blobs_per_block)?
             }
@@ -354,10 +370,12 @@ impl BlockId {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn get_blobs_by_versioned_hashes<T: BeaconChainTypes>(
+    pub async fn get_blobs_by_versioned_hashes<T: BeaconChainTypes>(
         &self,
         query: BlobsVersionedHashesQuery,
         chain: &BeaconChain<T>,
+        network_globals: Arc<NetworkGlobals<T::EthSpec>>,
+        network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
     ) -> Result<
         UnversionedResponse<Vec<BlobWrapper<T::EthSpec>>, ExecutionOptimisticFinalizedMetadata>,
         warp::Rejection,
@@ -390,7 +408,15 @@ impl BlockId {
         let max_blobs_per_block = chain.spec.max_blobs_per_block(block.epoch()) as usize;
         let blob_sidecar_list = if !blob_kzg_commitments.is_empty() {
             if chain.spec.is_peer_das_enabled_for_epoch(block.epoch()) {
-                Self::get_blobs_from_data_columns(chain, root, blob_indices_opt, &block)?
+                Self::get_blobs_from_data_columns(
+                    chain,
+                    root,
+                    blob_indices_opt,
+                    &block,
+                    network_globals,
+                    network_tx,
+                )
+                .await?
             } else {
                 Self::get_blobs(chain, root, blob_indices_opt, max_blobs_per_block)?
             }
@@ -446,11 +472,13 @@ impl BlockId {
         Ok(blob_sidecar_list_filtered)
     }
 
-    fn get_blobs_from_data_columns<T: BeaconChainTypes>(
+    async fn get_blobs_from_data_columns<T: BeaconChainTypes>(
         chain: &BeaconChain<T>,
         root: Hash256,
         blob_indices: Option<Vec<u64>>,
         block: &SignedBlindedBeaconBlock<<T as BeaconChainTypes>::EthSpec>,
+        network_globals: Arc<NetworkGlobals<T::EthSpec>>,
+        network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
     ) -> Result<BlobSidecarList<T::EthSpec>, Rejection> {
         let column_indices = chain.store.get_data_column_keys(root).map_err(|e| {
             warp_utils::reject::custom_server_error(format!(
@@ -461,6 +489,71 @@ impl BlockId {
         let num_found_column_keys = column_indices.len();
         let num_required_columns = T::EthSpec::number_of_columns() / 2;
         let is_blob_available = num_found_column_keys >= num_required_columns;
+
+        if !is_blob_available {
+            // Try fetching the blobs from the network
+            let res = network_globals
+                .peers
+                .read()
+                .peers()
+                .find_map(|(peer_id, info)| {
+                    if info.is_connected() && info.custody_subnet_count() > 64 {
+                        Some((
+                            *peer_id,
+                            info.custody_subnets_iter().cloned().collect::<Vec<_>>(),
+                        ))
+                    } else {
+                        None
+                    }
+                });
+            if let Some((peer_id, columns)) = res {
+                tracing::debug!(?peer_id, "Requesing columns from peers over p2p");
+                let request = RequestType::DataColumnsByRoot(
+                    lighthouse_network::rpc::methods::DataColumnsByRootRequest {
+                        data_column_ids: RuntimeVariableList::new(
+                            vec![DataColumnsByRootIdentifier {
+                                block_root: root,
+                                columns: columns
+                                    .into_iter()
+                                    .map(|c| c.into())
+                                    .collect::<Vec<_>>()
+                                    .into(),
+                            }],
+                            chain.spec.max_request_blocks(ForkName::Fulu),
+                        )
+                        .unwrap(),
+                    },
+                );
+                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                network_tx
+                    .send(NetworkMessage::SendRequest {
+                        peer_id,
+                        request,
+                        app_request_id: lighthouse_network::service::api_types::AppRequestId::Http(
+                            tx,
+                        ),
+                    })
+                    .unwrap();
+                let mut data_columns = Vec::new();
+                while let Some(RpcResponse::DataColumnsByRoot(Some(data_column))) = rx.recv().await
+                {
+                    data_columns.push(data_column);
+                }
+                drop(rx);
+                return reconstruct_blobs(
+                    &chain.kzg,
+                    &data_columns,
+                    blob_indices,
+                    block,
+                    &chain.spec,
+                )
+                .map_err(|e| {
+                    warp_utils::reject::custom_server_error(format!(
+                        "Error reconstructing data columns: {e:?}"
+                    ))
+                });
+            }
+        }
 
         if is_blob_available {
             let data_columns = column_indices

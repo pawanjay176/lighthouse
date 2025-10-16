@@ -64,7 +64,7 @@ pub enum NetworkMessage<E: EthSpec> {
     SendRequest {
         peer_id: PeerId,
         request: RequestType<E>,
-        app_request_id: AppRequestId,
+        app_request_id: AppRequestId<E>,
     },
     /// Send a successful Response to the libp2p service.
     SendResponse {
@@ -502,11 +502,15 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                 app_request_id,
                 response,
             } => {
-                self.send_to_router(RouterMessage::RPCResponseReceived {
-                    peer_id,
-                    app_request_id,
-                    response,
-                });
+                if let AppRequestId::Http(tx) = &app_request_id {
+                    let _ = tx.send(response).await;
+                } else {
+                    self.send_to_router(RouterMessage::RPCResponseReceived {
+                        peer_id,
+                        app_request_id,
+                        response,
+                    });
+                }
             }
             NetworkEvent::RPCFailed {
                 app_request_id,

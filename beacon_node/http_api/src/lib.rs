@@ -1907,16 +1907,27 @@ pub fn serve<T: BeaconChainTypes>(
         .and(task_spawner_filter.clone())
         .and(chain_filter.clone())
         .and(warp::header::optional::<api_types::Accept>("accept"))
+        .and(network_globals.clone())
+        .and(network_tx_filter.clone())
         .then(
             |block_id: BlockId,
              indices_res: Result<api_types::BlobIndicesQuery, warp::Rejection>,
              task_spawner: TaskSpawner<T::EthSpec>,
              chain: Arc<BeaconChain<T>>,
-             accept_header: Option<api_types::Accept>| {
-                task_spawner.blocking_response_task(Priority::P1, move || {
+             accept_header: Option<api_types::Accept>,
+             network_globals: Arc<NetworkGlobals<T::EthSpec>>,
+             network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>| {
+                task_spawner.spawn_async_with_rejection(Priority::P1, async move {
                     let indices = indices_res?;
                     let (block, blob_sidecar_list_filtered, execution_optimistic, finalized) =
-                        block_id.get_blinded_block_and_blob_list_filtered(indices, &chain)?;
+                        block_id
+                            .get_blinded_block_and_blob_list_filtered(
+                                indices,
+                                &chain,
+                                network_globals,
+                                network_tx,
+                            )
+                            .await?;
                     let fork_name = block
                         .fork_name(&chain.spec)
                         .map_err(inconsistent_fork_rejection)?;
@@ -1958,16 +1969,26 @@ pub fn serve<T: BeaconChainTypes>(
         .and(task_spawner_filter.clone())
         .and(chain_filter.clone())
         .and(warp::header::optional::<api_types::Accept>("accept"))
+        .and(network_globals.clone())
+        .and(network_tx_filter.clone())
         .then(
             |block_id: BlockId,
              version_hashes_res: Result<api_types::BlobsVersionedHashesQuery, warp::Rejection>,
              task_spawner: TaskSpawner<T::EthSpec>,
              chain: Arc<BeaconChain<T>>,
-             accept_header: Option<api_types::Accept>| {
-                task_spawner.blocking_response_task(Priority::P1, move || {
+             accept_header: Option<api_types::Accept>,
+             network_globals: Arc<NetworkGlobals<T::EthSpec>>,
+             network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>| {
+                task_spawner.spawn_async_with_rejection(Priority::P1, async move {
                     let versioned_hashes = version_hashes_res?;
-                    let response =
-                        block_id.get_blobs_by_versioned_hashes(versioned_hashes, &chain)?;
+                    let response = block_id
+                        .get_blobs_by_versioned_hashes(
+                            versioned_hashes,
+                            &chain,
+                            network_globals,
+                            network_tx,
+                        )
+                        .await?;
 
                     match accept_header {
                         Some(api_types::Accept::Ssz) => Response::builder()
