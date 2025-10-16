@@ -49,8 +49,8 @@ mod self_limiter;
 const MAX_CONCURRENT_REQUESTS: usize = 2;
 
 /// Composite trait for a request id.
-pub trait ReqId: Send + 'static + std::fmt::Debug + Clone {}
-impl<T> ReqId for T where T: Send + 'static + std::fmt::Debug + Clone {}
+pub trait ReqId: Send + 'static + std::fmt::Debug + Copy + Clone {}
+impl<T> ReqId for T where T: Send + 'static + std::fmt::Debug + Copy + Clone {}
 
 /// RPC events sent from Lighthouse.
 #[derive(Debug, Clone)]
@@ -406,7 +406,7 @@ where
                         peer_id,
                         connection_id,
                         message: Err(HandlerErr::Outbound {
-                            id: request_id.clone(),
+                            id: *request_id,
                             proto: req.versioned_protocol().protocol(),
                             error: RPCError::Disconnected,
                         }),

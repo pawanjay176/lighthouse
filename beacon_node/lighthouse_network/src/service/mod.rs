@@ -66,7 +66,7 @@ pub enum NetworkEvent<E: EthSpec> {
     /// An RPC Request that was sent failed.
     RPCFailed {
         /// The id of the failed request.
-        app_request_id: AppRequestId<E>,
+        app_request_id: AppRequestId,
         /// The peer to which this request was sent.
         peer_id: PeerId,
         /// The error of the failed request.
@@ -84,7 +84,7 @@ pub enum NetworkEvent<E: EthSpec> {
         /// Peer that sent the response.
         peer_id: PeerId,
         /// Id of the request to which the peer is responding.
-        app_request_id: AppRequestId<E>,
+        app_request_id: AppRequestId,
         /// Response the peer sent.
         response: Response<E>,
     },
@@ -128,7 +128,7 @@ where
     /// The peer manager that keeps track of peer's reputation and status.
     pub peer_manager: PeerManager<E>,
     /// The Eth2 RPC specified in the wire-0 protocol.
-    pub eth2_rpc: RPC<AppRequestId<E>, E>,
+    pub eth2_rpc: RPC<AppRequestId, E>,
     /// Discv5 Discovery protocol.
     pub discovery: Discovery<E>,
     /// Keep regular connection to peers and disconnect if absent.
@@ -649,7 +649,7 @@ impl<E: EthSpec> Network<E> {
         &mut self.swarm.behaviour_mut().gossipsub
     }
     /// The Eth2 RPC specified in the wire-0 protocol.
-    pub fn eth2_rpc_mut(&mut self) -> &mut RPC<AppRequestId<E>, E> {
+    pub fn eth2_rpc_mut(&mut self) -> &mut RPC<AppRequestId, E> {
         &mut self.swarm.behaviour_mut().eth2_rpc
     }
     /// Discv5 Discovery protocol.
@@ -670,7 +670,7 @@ impl<E: EthSpec> Network<E> {
         &self.swarm.behaviour().gossipsub
     }
     /// The Eth2 RPC specified in the wire-0 protocol.
-    pub fn eth2_rpc(&self) -> &RPC<AppRequestId<E>, E> {
+    pub fn eth2_rpc(&self) -> &RPC<AppRequestId, E> {
         &self.swarm.behaviour().eth2_rpc
     }
     /// Discv5 Discovery protocol.
@@ -968,9 +968,9 @@ impl<E: EthSpec> Network<E> {
     pub fn send_request(
         &mut self,
         peer_id: PeerId,
-        app_request_id: AppRequestId<E>,
+        app_request_id: AppRequestId,
         request: RequestType<E>,
-    ) -> Result<(), (AppRequestId<E>, RPCError)> {
+    ) -> Result<(), (AppRequestId, RPCError)> {
         // Check if the peer is connected before sending an RPC request
         if !self.swarm.is_connected(&peer_id) {
             return Err((app_request_id, RPCError::Disconnected));
@@ -1203,7 +1203,7 @@ impl<E: EthSpec> Network<E> {
     #[must_use = "return the response"]
     fn build_response(
         &mut self,
-        app_request_id: AppRequestId<E>,
+        app_request_id: AppRequestId,
         peer_id: PeerId,
         response: Response<E>,
     ) -> Option<NetworkEvent<E>> {
@@ -1397,7 +1397,7 @@ impl<E: EthSpec> Network<E> {
     }
 
     /// Handle an RPC event.
-    fn inject_rpc_event(&mut self, event: RPCMessage<AppRequestId<E>, E>) -> Option<NetworkEvent<E>> {
+    fn inject_rpc_event(&mut self, event: RPCMessage<AppRequestId, E>) -> Option<NetworkEvent<E>> {
         let peer_id = event.peer_id;
 
         // Do not permit Inbound events from peers that are being disconnected or RPC requests,
