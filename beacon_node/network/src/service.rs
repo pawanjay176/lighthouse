@@ -64,7 +64,13 @@ pub enum NetworkMessage<E: EthSpec> {
     SendRequest {
         peer_id: PeerId,
         request: RequestType<E>,
-        app_request_id: AppRequestId<E>,
+        app_request_id: AppRequestId,
+    },
+    SendRequestFromHttp {
+        peer_id: PeerId,
+        request: RequestType<E>,
+        app_request_id: AppRequestId,
+        http_tx: mpsc::Sender<Result<Response<E>, String>>,
     },
     /// Send a successful Response to the libp2p service.
     SendResponse {
@@ -203,6 +209,7 @@ pub struct NetworkService<T: BeaconChainTypes> {
     gossipsub_parameter_update: tokio::time::Interval,
     /// Provides fork specific info.
     fork_context: Arc<ForkContext>,
+    http_tx: Option<mpsc::Sender<Result<Response<T::EthSpec>, String>>>,
 }
 
 impl<T: BeaconChainTypes> NetworkService<T> {
@@ -354,6 +361,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             metrics_update,
             gossipsub_parameter_update,
             fork_context,
+            http_tx: None,
         };
 
         Ok((network_service, network_globals, network_senders))
@@ -502,8 +510,10 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                 app_request_id,
                 response,
             } => {
-                if let AppRequestId::Http(tx) = &app_request_id {
-                    let _ = tx.send(response).await;
+                if let AppRequestId::Http = &app_request_id {
+                    if let Some(tx) = &self.http_tx {
+                        let _ = tx.send(Ok(response)).await;
+                    }
                 } else {
                     self.send_to_router(RouterMessage::RPCResponseReceived {
                         peer_id,
@@ -604,6 +614,24 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                         error,
                     });
                 }
+            }
+            NetworkMessage::SendRequestFromHttp {
+                peer_id,
+                request,
+                app_request_id,
+                http_tx,
+            } => {
+                if let Err((app_request_id, error)) =
+                    self.libp2p.send_request(peer_id, app_request_id, request)
+                {
+                    self.send_to_router(RouterMessage::RPCFailed {
+                        peer_id,
+                        app_request_id,
+                        error,
+                    });
+                    let _ = http_tx.send(Err("failed to send request".to_string()));
+                }
+                self.http_tx = Some(http_tx);
             }
             NetworkMessage::SendResponse {
                 peer_id,

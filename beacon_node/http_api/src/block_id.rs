@@ -526,18 +526,31 @@ impl BlockId {
                 );
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
                 network_tx
-                    .send(NetworkMessage::SendRequest {
+                    .send(NetworkMessage::SendRequestFromHttp {
                         peer_id,
                         request,
-                        app_request_id: lighthouse_network::service::api_types::AppRequestId::Http(
-                            tx,
-                        ),
+                        app_request_id: lighthouse_network::service::api_types::AppRequestId::Http,
+                        http_tx: tx,
                     })
                     .unwrap();
                 let mut data_columns = Vec::new();
-                while let Some(RpcResponse::DataColumnsByRoot(Some(data_column))) = rx.recv().await
-                {
-                    data_columns.push(data_column);
+                loop {
+                    match rx.recv().await {
+                        Some(Ok(resp)) => match resp {
+                            RpcResponse::DataColumnsByRoot(Some(data_column)) => {
+                                data_columns.push(data_column)
+                            }
+                            RpcResponse::DataColumnsByRoot(None) => break,
+                            r => tracing::error!(?r, "Received an invalid response from peer"),
+                        },
+                        None => {
+                            tracing::debug!("Channel closed while trying to receive response");
+                        }
+                        Some(Err(e)) => {
+                            tracing::debug!(?e, "Error when trying to send rpc request from http")
+                        }
+                    }
+                    // TODO(pawan): check columns against block
                 }
                 drop(rx);
                 return reconstruct_blobs(

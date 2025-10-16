@@ -562,6 +562,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All BBRange requests belong to sync");
                 return;
             }
+            AppRequestId::Http => unreachable!("Handled in network service"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -621,6 +622,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All BBRoot requests belong to sync");
                 return;
             }
+            AppRequestId::Http => unreachable!("Handled in network service"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -655,6 +657,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All BlobsByRoot requests belong to sync");
                 return;
             }
+            AppRequestId::Http => unreachable!("Handled in network service"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 
@@ -689,6 +692,7 @@ impl<T: BeaconChainTypes> Router<T> {
                 crit!(%peer_id, "All DataColumnsByRoot requests belong to sync");
                 return;
             }
+            AppRequestId::Http => unreachable!("Handled in network service"),
             AppRequestId::Internal => unreachable!("Handled internally"),
         };
 

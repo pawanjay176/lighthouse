@@ -111,12 +111,12 @@ pub struct CustodyId {
 pub struct CustodyRequester(pub SingleLookupReqId);
 
 /// Application level requests sent to the network.
-#[derive(Debug, Clone)]
-pub enum AppRequestId<E: EthSpec> {
+#[derive(Debug, Clone, Copy)]
+pub enum AppRequestId {
     Sync(SyncRequestId),
     Router,
     Internal,
-    Http(tokio::sync::mpsc::Sender<Response<E>>),
+    Http,
 }
 
 /// The type of RPC responses the Behaviour informs it has received, and allows for sending.
