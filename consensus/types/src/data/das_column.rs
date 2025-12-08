@@ -10,19 +10,60 @@ use crate::{
     Slot,
 };
 use kzg::{KzgCommitment, KzgProof};
-use ssz_types::VariableList;
+use ssz_types::{FixedVector, VariableList};
 use std::borrow::Cow;
+use std::sync::Arc;
+use crate::partial_data_column_sidecar::{DanglingPartialDataColumn, PartialDataColumnSidecar};
 
-// TODO(dknopik): Name good?
-// TODO(dknopik): Maybe move to unified cell storage?
-// TODO(dknopik): Move generic parameter to associated type?
-pub trait DasColumn<E: EthSpec>: Clone {
-    fn slot(&self) -> Slot;
-    fn index(&self) -> ColumnIndex;
-    fn cell_count_total(&self) -> usize;
-    fn cells_present(&self) -> impl Iterator<Item = usize>;
-    fn column(&self) -> &DataColumn<E>;
-    fn kzg_proofs(&self) -> &VariableList<KzgProof, E::MaxBlobCommitmentsPerBlock>;
+#[derive(Clone)]
+pub struct DasColumn<E: EthSpec> {
+    block_root: Hash256,
+    slot: Slot,
+    index: ColumnIndex,
+    column: VariableList<Option<Cell<E>>, E::MaxBlobCommitmentsPerBlock>,
+    kzg_proofs: VariableList<KzgProof, E::MaxBlobCommitmentsPerBlock>,
+    proof_components: Option<Arc<ProofComponents<E>>>,
+}
+
+pub struct ProofComponents<E: EthSpec> {
+    /// All the KZG commitments and proofs associated with the block, used for verifying sample cells.
+    pub kzg_commitments: KzgCommitments<E>,
+    pub signed_block_header: SignedBeaconBlockHeader,
+    /// An inclusion proof, proving the inclusion of `blob_kzg_commitments` in `BeaconBlockBody`.
+    pub kzg_commitments_inclusion_proof: FixedVector<Hash256, E::KzgCommitmentsInclusionProofDepth>,
+}
+
+impl<E: EthSpec> DasColumn<E> {
+    fn slot(&self) -> Slot {
+        self.slot
+    }
+    fn index(&self) -> ColumnIndex {
+        self.index
+    }
+
+    fn column(&self) -> &VariableList<Option<Cell<E>>, E::MaxBlobCommitmentsPerBlock> {
+        &self.column
+    }
+
+    fn proof_components(&self) -> &Option<Arc<ProofComponents<E>>> {
+        &self.proof_components
+    }
+
+    fn to_partial(&self) -> DanglingPartialDataColumn<E> {
+        DanglingPartialDataColumn {
+            block_root: self.block_root,
+            index: self.index,
+            // todo
+            sidecar: PartialDataColumnSidecar {
+                cells_present_bitmap: (),
+                column: (),
+                kzg_proofs: (),
+            },
+        }
+    }
+}
+
+fn kzg_proofs(&self) -> &VariableList<KzgProof, E::MaxBlobCommitmentsPerBlock>;
     fn kzg_commitments(&self) -> &KzgCommitments<E>;
     fn block_root(&self) -> Hash256;
     fn signed_block_header(&self) -> Option<&SignedBeaconBlockHeader>;
