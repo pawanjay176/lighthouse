@@ -33,7 +33,7 @@ use crate::{
 };
 
 pub type ColumnIndex = u64;
-pub type Cell<E> = Arc<[u8; <E as EthSpec>::BytesPerCell]>;
+pub type Cell<E> = Arc<FixedVector<u8, <E as EthSpec>::BytesPerCell>>;
 pub type DataColumn<E> = VariableList<Cell<E>, <E as EthSpec>::MaxBlobCommitmentsPerBlock>;
 
 /// Identifies a set of data columns associated with a specific beacon block.
@@ -51,14 +51,10 @@ pub type DataColumnSidecarList<E> = Vec<Arc<DataColumnSidecar<E>>>;
     derive(arbitrary::Arbitrary),
     arbitrary(bound = "E: EthSpec")
 )]
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom, Educe)]
-#[serde(bound = "E: EthSpec")]
+#[derive(Debug, Clone, Encode, Decode, TreeHash, TestRandom, Educe)]
 #[educe(PartialEq, Eq, Hash(bound(E: EthSpec)))]
-#[context_deserialize(ForkName)]
 pub struct DataColumnSidecar<E: EthSpec> {
-    #[serde(with = "serde_utils::quoted_u64")]
     pub index: ColumnIndex,
-    #[serde(with = "ssz_types::serde_utils::list_of_hex_fixed_vec")]
     pub column: DataColumn<E>,
     /// All the KZG commitments and proofs associated with the block, used for verifying sample cells.
     pub kzg_commitments: KzgCommitments<E>,
@@ -176,88 +172,5 @@ impl From<KzgError> for DataColumnSidecarError {
 impl From<SszError> for DataColumnSidecarError {
     fn from(e: SszError) -> Self {
         Self::SszError(e)
-    }
-}
-
-impl<E: EthSpec> DasColumn<E> for DataColumnSidecar<E> {
-    fn slot(&self) -> Slot {
-        self.slot()
-    }
-
-    fn index(&self) -> ColumnIndex {
-        self.index
-    }
-
-    fn cell_count_total(&self) -> usize {
-        self.column.len()
-    }
-
-    fn cells_present(&self) -> impl Iterator<Item = usize> {
-        0..self.cell_count_total()
-    }
-
-    fn column(&self) -> &DataColumn<E> {
-        &self.column
-    }
-
-    fn kzg_proofs(&self) -> &VariableList<KzgProof, E::MaxBlobCommitmentsPerBlock> {
-        &self.kzg_proofs
-    }
-
-    fn kzg_commitments(&self) -> &KzgCommitments<E> {
-        &self.kzg_commitments
-    }
-
-    fn block_root(&self) -> Hash256 {
-        self.block_root()
-    }
-
-    fn signed_block_header(&self) -> Option<&SignedBeaconBlockHeader> {
-        Some(&self.signed_block_header)
-    }
-
-    fn into_partial(self) -> VerifiablePartialDataColumn<E> {
-        let mut bitmap = CellBitmap::<E>::with_capacity(self.cell_count_total())
-            .expect("our column has the same bound");
-        for idx in 0..self.cell_count_total() {
-            bitmap
-                .set(idx, true)
-                .expect("The correct size is initialized right above");
-        }
-
-        VerifiablePartialDataColumn {
-            slot: self.slot(),
-            column: Arc::new(DanglingPartialDataColumn {
-                block_root: self.block_root(),
-                index: self.index(),
-                sidecar: PartialDataColumnSidecar {
-                    cells_present_bitmap: bitmap,
-                    column: self.column,
-                    kzg_proofs: self.kzg_proofs,
-                },
-            }),
-            kzg_commitments: self.kzg_commitments,
-        }
-    }
-
-    fn as_full(
-        &self,
-        _block: Option<&SignedBeaconBlock<E>>,
-    ) -> Option<Cow<'_, DataColumnSidecar<E>>> {
-        Some(Cow::Borrowed(self))
-    }
-
-    fn iter(&self) -> impl Iterator<Item = Option<CellWithMetadata<'_, E>>> {
-        self.column
-            .iter()
-            .zip(self.kzg_commitments.iter())
-            .zip(self.kzg_proofs.iter())
-            .map(|((cell, commitment), proof)| {
-                Some(CellWithMetadata {
-                    cell,
-                    commitment,
-                    proof,
-                })
-            })
     }
 }

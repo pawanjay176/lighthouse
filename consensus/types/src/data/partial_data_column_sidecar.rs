@@ -24,13 +24,10 @@ pub type CellBitmap<E> = BitList<<E as EthSpec>::MaxBlobCommitmentsPerBlock>;
     derive(arbitrary::Arbitrary),
     arbitrary(bound = "E: EthSpec")
 )]
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom, Educe)]
-#[serde(bound = "E: EthSpec")]
+#[derive(Debug, Clone, Encode, Decode, TreeHash, TestRandom, Educe)]
 #[educe(PartialEq, Eq, Hash(bound = "E: EthSpec"))]
-#[context_deserialize(ForkName)]
 pub struct PartialDataColumnSidecar<E: EthSpec> {
     pub cells_present_bitmap: CellBitmap<E>,
-    #[serde(with = "ssz_types::serde_utils::list_of_hex_fixed_vec")]
     pub column: DataColumn<E>,
     pub kzg_proofs: VariableList<KzgProof, E::MaxBlobCommitmentsPerBlock>,
 }
@@ -258,106 +255,5 @@ impl<E: EthSpec> VerifiablePartialDataColumn<E> {
             kzg_commitments: self.kzg_commitments.clone(),
             slot: self.slot,
         })
-    }
-}
-
-impl<E: EthSpec> DasColumn<E> for VerifiablePartialDataColumn<E> {
-    fn slot(&self) -> Slot {
-        self.slot
-    }
-
-    fn index(&self) -> ColumnIndex {
-        self.column.index
-    }
-
-    fn cell_count_total(&self) -> usize {
-        self.column.sidecar.cells_present_bitmap.len()
-    }
-
-    fn cells_present(&self) -> impl Iterator<Item = usize> {
-        self.column
-            .sidecar
-            .cells_present_bitmap
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, bit)| bit.then_some(idx))
-    }
-
-    fn column(&self) -> &DataColumn<E> {
-        &self.column.sidecar.column
-    }
-
-    fn kzg_proofs(&self) -> &VariableList<KzgProof, E::MaxBlobCommitmentsPerBlock> {
-        &self.column.sidecar.kzg_proofs
-    }
-
-    fn kzg_commitments(&self) -> &KzgCommitments<E> {
-        &self.kzg_commitments
-    }
-
-    fn block_root(&self) -> Hash256 {
-        self.column.block_root.tree_hash_root()
-    }
-
-    fn signed_block_header(&self) -> Option<&SignedBeaconBlockHeader> {
-        None
-    }
-
-    fn into_partial(self) -> VerifiablePartialDataColumn<E> {
-        self
-    }
-
-    fn as_full(
-        &self,
-        block: Option<&SignedBeaconBlock<E>>,
-    ) -> Option<Cow<'_, DataColumnSidecar<E>>> {
-        // we definitely require the block
-        let block = block?;
-
-        // we need to have all columns
-        if !self.column.sidecar.is_complete() {
-            return None;
-        }
-
-        // we need to have the correct amount of everything
-        let expected = self.column.sidecar.cells_present_bitmap.len();
-        if self.column.sidecar.column.len() != expected
-            || self.column.sidecar.kzg_proofs.len() != expected
-            || self.kzg_commitments.len() != expected
-        {
-            return None;
-        }
-
-        let (signed_block_header, kzg_commitments_inclusion_proof) =
-            block.signed_block_header_and_kzg_commitments_proof().ok()?;
-        Some(Cow::Owned(DataColumnSidecar {
-            kzg_commitments_inclusion_proof,
-            index: self.column.index,
-            column: self.column.sidecar.column.clone(),
-            kzg_commitments: self.kzg_commitments.clone(),
-            kzg_proofs: self.column.sidecar.kzg_proofs.clone(),
-            signed_block_header,
-        }))
-    }
-
-    fn iter(&self) -> impl Iterator<Item = Option<CellWithMetadata<'_, E>>> {
-        let sidecar = &self.column.sidecar;
-        let mut present_iterator = sidecar.column.iter().zip(sidecar.kzg_proofs.iter());
-        sidecar
-            .cells_present_bitmap
-            .iter()
-            .zip(self.kzg_commitments.iter())
-            .map(move |(present, commitment)| {
-                if present {
-                    let (cell, proof) = present_iterator.next()?;
-                    Some(CellWithMetadata {
-                        cell,
-                        proof,
-                        commitment,
-                    })
-                } else {
-                    None
-                }
-            })
     }
 }
