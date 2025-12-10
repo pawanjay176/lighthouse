@@ -138,21 +138,15 @@ impl<E: EthSpec> DasColumn<E> {
 
 impl<E: EthSpec> From<DataColumnSidecar<E>> for DasColumn<E> {
     fn from(sidecar: DataColumnSidecar<E>) -> Self {
-        // Wrap each cell in Some() to create full-length vector
+        // Pair each cell with its proof
         let column = sidecar
             .column
             .iter()
-            .map(|cell| Some(cell.clone()))
+            .zip(sidecar.kzg_proofs.iter())
+            .map(|(cell, proof)| Some(Arc::new((cell.clone(), *proof))))
             .collect::<Vec<_>>();
 
         let column = VariableList::new(column).expect("Column length within bounds");
-
-        // Create ProofComponents from sidecar fields
-        let proof_components = Some(Arc::new(ProofComponents {
-            kzg_commitments: sidecar.kzg_commitments.clone(),
-            signed_block_header: sidecar.signed_block_header.clone(),
-            kzg_commitments_inclusion_proof: sidecar.kzg_commitments_inclusion_proof.clone(),
-        }));
 
         // Extract block_root from signed_block_header
         let block_root = sidecar.signed_block_header.message.tree_hash_root();
@@ -163,46 +157,52 @@ impl<E: EthSpec> From<DataColumnSidecar<E>> for DasColumn<E> {
             slot,
             index: sidecar.index,
             column,
-            kzg_proofs: sidecar.kzg_proofs,
-            proof_components,
+            kzg_commitments: sidecar.kzg_commitments,
+            signed_block_header: sidecar.signed_block_header,
+            kzg_commitments_inclusion_proof: sidecar.kzg_commitments_inclusion_proof,
         }
     }
 }
 
 impl<E: EthSpec> DasColumn<E> {
-    /// Create a DasColumn from a DanglingPartialDataColumn with a provided slot
-    pub fn from_dangling_partial(partial: DanglingPartialDataColumn<E>, slot: Slot) -> Self {
+    /// Create a DasColumn from a DanglingPartialDataColumn with a provided slot and commitments
+    pub fn from_dangling_partial(
+        partial: DanglingPartialDataColumn<E>,
+        slot: Slot,
+        kzg_commitments: KzgCommitments<E>,
+        signed_block_header: SignedBeaconBlockHeader,
+        kzg_commitments_inclusion_proof: FixedVector<Hash256, E::KzgCommitmentsInclusionProofDepth>,
+    ) -> Self {
         let sidecar = &partial.sidecar;
         let bitmap = &sidecar.cells_present_bitmap;
 
         // Create full-length vector initialized with None
         let mut column_vec = vec![None; bitmap.len()];
-        let mut kzg_proofs_vec = vec![KzgProof::empty(); bitmap.len()];
 
-        // Iterate bitmap to find present cell positions
+        // Iterate bitmap to find present cell positions and pair cells with proofs
         let mut packed_idx = 0;
         for (idx, present) in bitmap.iter().enumerate() {
             if present {
-                if let Some(cell) = sidecar.column.get(packed_idx) {
-                    column_vec[idx] = Some(cell.clone());
-                }
-                if let Some(proof) = sidecar.kzg_proofs.get(packed_idx) {
-                    kzg_proofs_vec[idx] = *proof;
+                if let (Some(cell), Some(proof)) = (
+                    sidecar.column.get(packed_idx),
+                    sidecar.kzg_proofs.get(packed_idx),
+                ) {
+                    column_vec[idx] = Some(Arc::new((cell.clone(), *proof)));
                 }
                 packed_idx += 1;
             }
         }
 
         let column = VariableList::new(column_vec).expect("Column length within bounds");
-        let kzg_proofs = VariableList::new(kzg_proofs_vec).expect("Proofs length within bounds");
 
         DasColumn {
             block_root: partial.block_root,
             slot,
             index: partial.index,
             column,
-            kzg_proofs,
-            proof_components: None, // No commitments for dangling partial
+            kzg_commitments,
+            signed_block_header,
+            kzg_commitments_inclusion_proof,
         }
     }
 
@@ -217,20 +217,16 @@ impl<E: EthSpec> DasColumn<E> {
         let mut packed_column = Vec::new();
         let mut packed_proofs = Vec::new();
 
-        // Iterate column and pack present cells
-        for (idx, cell_opt) in self.column.iter().enumerate() {
-            match cell_opt {
-                Some(cell) => {
+        // Iterate column and pack present cells, unpacking cell/proof pairs
+        for (idx, cell_data) in self.column.iter().enumerate() {
+            match cell_data {
+                Some(cell_proof) => {
                     bitmap
                         .set(idx, true)
                         .map_err(|_| PartialConversionError::BitmapSet)?;
+                    let (cell, proof) = cell_proof.as_ref();
                     packed_column.push(cell.clone());
-                    packed_proofs.push(
-                        *self
-                            .kzg_proofs
-                            .get(idx)
-                            .ok_or(PartialConversionError::KzgProofMissing { index: idx })?,
-                    );
+                    packed_proofs.push(*proof);
                 }
                 None => {
                     bitmap
@@ -259,7 +255,7 @@ impl<E: EthSpec> DasColumn<E> {
         })
     }
 
-    /// Convert DasColumn to DataColumnSidecar if all cells are present and proof_components available
+    /// Convert DasColumn to DataColumnSidecar if all cells are present
     pub fn to_full(&self) -> Result<DataColumnSidecar<E>, FullConversionError> {
         // Validate all cells are present
         if !self.is_complete() {
@@ -268,85 +264,39 @@ impl<E: EthSpec> DasColumn<E> {
             return Err(FullConversionError::IncompleteCells { present, total });
         }
 
-        // Validate proof_components exist
-        let proof_components = self
-            .proof_components
-            .as_ref()
-            .ok_or(FullConversionError::MissingProofComponents)?;
+        // Unpack all cell/proof pairs to create separate dense lists
+        let mut cells = Vec::new();
+        let mut proofs = Vec::new();
 
-        // Unwrap all Option<Cell> to create dense VariableList<Cell>
-        let column = self
-            .column
-            .iter()
-            .map(|cell_opt| {
-                cell_opt
-                    .clone()
-                    .expect("is_complete() check ensures all cells are Some")
-            })
-            .collect::<Vec<_>>();
+        for cell_data in self.column.iter() {
+            let (cell, proof) = cell_data
+                .as_ref()
+                .expect("is_complete() check ensures all cells are Some")
+                .as_ref();
+            cells.push(cell.clone());
+            proofs.push(*proof);
+        }
 
-        let column = VariableList::new(column).expect("Column length within bounds");
+        let column = VariableList::new(cells).expect("Column length within bounds");
+        let kzg_proofs = VariableList::new(proofs).expect("Proofs length within bounds");
 
         Ok(DataColumnSidecar {
             index: self.index,
             column,
-            kzg_commitments: proof_components.kzg_commitments.clone(),
-            kzg_proofs: self.kzg_proofs.clone(),
-            signed_block_header: proof_components.signed_block_header.clone(),
-            kzg_commitments_inclusion_proof: proof_components
-                .kzg_commitments_inclusion_proof
-                .clone(),
+            kzg_commitments: self.kzg_commitments.clone(),
+            kzg_proofs,
+            signed_block_header: self.signed_block_header.clone(),
+            kzg_commitments_inclusion_proof: self.kzg_commitments_inclusion_proof.clone(),
         })
     }
 
-    /// Try to convert to full DataColumnSidecar, optionally using block to construct proof_components
+    /// Try to convert to full DataColumnSidecar
     pub fn as_full<'a>(
         &'a self,
-        block: Option<&SignedBeaconBlock<E>>,
+        _block: Option<&SignedBeaconBlock<E>>,
     ) -> Option<Cow<'a, DataColumnSidecar<E>>> {
-        // First try direct conversion
-        if let Ok(full) = self.to_full() {
-            return Some(Cow::Owned(full));
-        }
-
-        // If missing proof_components but have block, try to construct
-        if self.is_complete() && self.proof_components.is_none() {
-            if let Some(block) = block {
-                // Try to construct proof_components from block
-                if let Ok((signed_block_header, kzg_commitments_inclusion_proof)) =
-                    block.signed_block_header_and_kzg_commitments_proof()
-                {
-                    if let Ok(kzg_commitments) =
-                        block.message().body().blob_kzg_commitments().cloned()
-                    {
-                        // Unwrap all cells
-                        let column = self
-                            .column
-                            .iter()
-                            .map(|cell_opt| {
-                                cell_opt
-                                    .clone()
-                                    .expect("is_complete() check ensures all cells are Some")
-                            })
-                            .collect::<Vec<_>>();
-
-                        let column =
-                            VariableList::new(column).expect("Column length within bounds");
-
-                        return Some(Cow::Owned(DataColumnSidecar {
-                            index: self.index,
-                            column,
-                            kzg_commitments,
-                            kzg_proofs: self.kzg_proofs.clone(),
-                            signed_block_header,
-                            kzg_commitments_inclusion_proof,
-                        }));
-                    }
-                }
-            }
-        }
-
-        None
+        // Try direct conversion - now always possible if complete
+        self.to_full().ok().map(Cow::Owned)
     }
 
     /// Merge another DasColumn into this one
@@ -383,41 +333,21 @@ impl<E: EthSpec> DasColumn<E> {
             self.column.iter_mut().zip(other.column.iter()).enumerate()
         {
             match (self_cell.as_ref(), other_cell.as_ref()) {
-                (None, Some(cell)) => {
-                    // Copy cell from other
-                    *self_cell = Some(cell.clone());
-                    // Copy proof
-                    if let Some(proof) = other.kzg_proofs.get(idx) {
-                        if let Some(self_proof) = self.kzg_proofs.get_mut(idx) {
-                            *self_proof = *proof;
-                        }
-                    }
+                (None, Some(cell_proof)) => {
+                    // Copy cell/proof pair from other
+                    *self_cell = Some(cell_proof.clone());
                     did_merge = true;
                 }
-                (Some(self_cell), Some(other_cell)) => {
-                    // Verify cells match
-                    if self_cell != other_cell {
+                (Some(self_data), Some(other_data)) => {
+                    // Verify cell/proof pairs match
+                    if self_data != other_data {
                         return Err(MergeError::DataConflict { index: idx });
-                    }
-                    // Also verify proofs match
-                    if let (Some(self_proof), Some(other_proof)) =
-                        (self.kzg_proofs.get(idx), other.kzg_proofs.get(idx))
-                    {
-                        if self_proof != other_proof {
-                            return Err(MergeError::DataConflict { index: idx });
-                        }
                     }
                 }
                 (Some(_), None) | (None, None) => {
                     // No action needed
                 }
             }
-        }
-
-        // Copy proof_components if self doesn't have it
-        if self.proof_components.is_none() && other.proof_components.is_some() {
-            self.proof_components = other.proof_components.clone();
-            did_merge = true;
         }
 
         Ok(did_merge)
