@@ -1292,7 +1292,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         let data_column_index = verified_data_column.index();
 
         let cloned_self = self.clone();
-        let data_publish_fn = move |merged_data: MergedData<T::EthSpec>| {
+        let data_publish_fn = move |merged_data: Vec<DasColumn<T::EthSpec>>| {
             debug!(
                 partial = merged_data.updated_partials.len(),
                 full = merged_data.completed_columns.len(),

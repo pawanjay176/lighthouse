@@ -34,7 +34,6 @@ use state_processing::per_block_processing::deneb::kzg_commitment_to_versioned_h
 use std::sync::Arc;
 use tracing::{Span, debug, instrument, warn};
 use types::blob_sidecar::BlobSidecarError;
-use types::das_column::DasColumn;
 use types::data_column_sidecar::DataColumnSidecarError;
 use types::partial_data_column_sidecar::VerifiablePartialDataColumn;
 use types::{
@@ -50,7 +49,7 @@ pub enum EngineGetBlobsOutput<T: BeaconChainTypes> {
     Blobs(Vec<KzgVerifiedBlob<T::EthSpec>>),
     /// A filtered list of custody data columns to be imported into the `DataAvailabilityChecker`.
     CustodyColumns(
-        Vec<KzgVerifiedCustodyDataColumn<T::EthSpec, VerifiablePartialDataColumn<T::EthSpec>>>,
+        Vec<KzgVerifiedCustodyDataColumn<T::EthSpec>>,
     ),
 }
 
@@ -343,7 +342,7 @@ async fn compute_custody_columns_to_import<T: BeaconChainTypes>(
     blobs_and_proofs: Vec<BlobAndProofV3<T::EthSpec>>,
     custody_columns_indices: &[ColumnIndex],
 ) -> Result<
-    Vec<KzgVerifiedCustodyDataColumn<T::EthSpec, VerifiablePartialDataColumn<T::EthSpec>>>,
+    Vec<KzgVerifiedCustodyDataColumn<T::EthSpec>>,
     FetchEngineBlobError,
 > {
     let kzg = chain_adapter.kzg().clone();

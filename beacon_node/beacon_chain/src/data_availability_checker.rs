@@ -183,14 +183,14 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
     /// Check if the (potentially partial) data column is in the availability cache.
     /// Returns None if this is not checkable due to conflicting data, and a vec of missing cells
     /// otherwise.
-    pub fn determine_missing_cells<C: DasColumn<T::EthSpec>>(
+    pub fn determine_missing_cells(
         &self,
         block_root: &Hash256,
-        data_column: &C,
+        data_column: &DasColumn<T::EthSpec>,
     ) -> Option<Vec<usize>> {
-        fn do_compare<E: EthSpec, C1: DasColumn<E>, C2: DasColumn<E>>(
-            cached: &C1,
-            data_column: &C2,
+        fn do_compare<E: EthSpec>(
+            cached: &DasColumn<E>,
+            data_column: &DasColumn<E>,
         ) -> Option<Vec<usize>> {
             match cached.compare(data_column) {
                 ColumnComparison::Equal => Some(vec![]),
@@ -207,11 +207,6 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
                 if let Some(components) = components {
                     if let Some(cached_column) =
                         components.get_cached_data_column(data_column.index())
-                    {
-                        return do_compare(cached_column.as_ref(), data_column);
-                    }
-                    if let Some(cached_column) =
-                        components.get_cached_partial_data_column(data_column.index())
                     {
                         return do_compare(cached_column.as_ref(), data_column);
                     }
@@ -335,14 +330,13 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
     #[instrument(skip_all, level = "trace")]
     pub fn put_gossip_verified_data_columns<
         O: ObservationStrategy,
-        C: DasColumn<T::EthSpec>,
-        I: IntoIterator<Item = GossipVerifiedDataColumn<T, C, O>>,
+        I: IntoIterator<Item = GossipVerifiedDataColumn<T, O>>,
     >(
         &self,
         block_root: Hash256,
         slot: Slot,
         data_columns: I,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<Availability<T::EthSpec>, AvailabilityCheckError> {
         let epoch = slot.epoch(T::EthSpec::slots_per_epoch());
         let sampling_columns = self
@@ -363,13 +357,12 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
 
     #[instrument(skip_all, level = "trace")]
     pub fn put_kzg_verified_custody_data_columns<
-        I: IntoIterator<Item = KzgVerifiedCustodyDataColumn<T::EthSpec, C>>,
-        C: DasColumn<T::EthSpec>,
+        I: IntoIterator<Item = KzgVerifiedCustodyDataColumn<T::EthSpec>>,
     >(
         &self,
         block_root: Hash256,
         custody_columns: I,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<Availability<T::EthSpec>, AvailabilityCheckError> {
         self.availability_cache.put_kzg_verified_data_columns(
             block_root,
@@ -383,7 +376,7 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
     pub fn put_executed_block(
         &self,
         executed_block: AvailabilityPendingExecutedBlock<T::EthSpec>,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<Availability<T::EthSpec>, AvailabilityCheckError> {
         self.availability_cache
             .put_executed_block(executed_block, data_publish_fn)
@@ -902,21 +895,6 @@ impl<E: EthSpec> MaybeAvailableBlock<E> {
         match self {
             Self::Available(block) => block.block_cloned(),
             Self::AvailabilityPending { block, .. } => block.clone(),
-        }
-    }
-}
-
-#[must_use = "Publish the data within"]
-pub struct MergedData<E: EthSpec> {
-    pub completed_columns: Vec<Arc<DataColumnSidecar<E>>>,
-    pub updated_partials: Vec<Arc<VerifiablePartialDataColumn<E>>>,
-}
-
-impl<E: EthSpec> MergedData<E> {
-    pub fn empty() -> Self {
-        MergedData {
-            completed_columns: vec![],
-            updated_partials: vec![],
         }
     }
 }

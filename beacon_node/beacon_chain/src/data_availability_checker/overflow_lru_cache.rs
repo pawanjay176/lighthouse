@@ -1,5 +1,5 @@
+use super::AvailableBlockData;
 use super::state_lru_cache::{DietAvailabilityPendingExecutedBlock, StateLRUCache};
-use super::{AvailableBlockData, MergedData};
 use crate::CustodyContext;
 use crate::beacon_chain::BeaconStore;
 use crate::blob_verification::KzgVerifiedBlob;
@@ -14,17 +14,15 @@ use lru::LruCache;
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use ssz_types::{RuntimeFixedVector, RuntimeVariableList};
 use std::cmp::Ordering;
-use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use tracing::{Span, debug, debug_span};
+use tracing::{Span, debug, debug_span, error};
 use types::beacon_block_body::KzgCommitments;
 use types::blob_sidecar::BlobIdentifier;
-use types::das_column::DasColumn;
-use types::partial_data_column_sidecar::VerifiablePartialDataColumn;
+use types::das_column::{DasColumn, MergeError};
 use types::{
-    BlobSidecar, BlockImportSource, ChainSpec, ColumnIndex, DataColumnSidecar,
-    DataColumnSidecarList, Epoch, EthSpec, Hash256, SignedBeaconBlock,
+    BlobSidecar, BlockImportSource, ChainSpec, ColumnIndex, DataColumnSidecarList, Epoch, EthSpec,
+    Hash256, SignedBeaconBlock,
 };
 
 #[derive(Clone)]
@@ -76,17 +74,14 @@ impl<E: EthSpec> CachedBlock<E> {
 pub struct PendingComponents<E: EthSpec> {
     pub block_root: Hash256,
     pub verified_blobs: RuntimeFixedVector<Option<KzgVerifiedBlob<E>>>,
-    // TODO(dknopik): four options: two fields, one field containing an enum, converting everything to partial, or refactor for cell level storage
-    pub verified_partial_columns:
-        Vec<KzgVerifiedCustodyDataColumn<E, VerifiablePartialDataColumn<E>>>,
-    pub verified_data_columns: Vec<KzgVerifiedCustodyDataColumn<E, DataColumnSidecar<E>>>,
+    pub verified_data_columns: Vec<KzgVerifiedCustodyDataColumn<E>>,
     pub block: Option<CachedBlock<E>>,
     pub reconstruction_started: bool,
     span: Span,
 }
 
 impl<E: EthSpec> PendingComponents<E> {
-    /// Returns an immutable reference to the fixed vector of cached blobs.
+    /// Returns an immutable reference to the fixed vector of cached blobs.zgVerifiedCustodyDataCol
     pub fn get_cached_blobs(&self) -> &RuntimeFixedVector<Option<KzgVerifiedBlob<E>>> {
         &self.verified_blobs
     }
@@ -100,25 +95,20 @@ impl<E: EthSpec> PendingComponents<E> {
     }
 
     /// Returns an immutable reference to the full cached data column.
-    pub fn get_cached_data_column(
-        &self,
-        data_column_index: u64,
-    ) -> Option<Arc<DataColumnSidecar<E>>> {
+    pub fn get_cached_data_column(&self, data_column_index: u64) -> Option<&DasColumn<E>> {
         self.verified_data_columns
             .iter()
             .find(|d| d.index() == data_column_index)
-            .map(|d| d.clone_arc())
+            .map(|d| d.as_data_column())
     }
 
-    /// Returns an immutable reference to the partial cached data column.
-    pub fn get_cached_partial_data_column(
-        &self,
+    pub fn get_cached_data_column_mut(
+        &mut self,
         data_column_index: u64,
-    ) -> Option<Arc<VerifiablePartialDataColumn<E>>> {
-        self.verified_partial_columns
-            .iter()
+    ) -> Option<&mut KzgVerifiedCustodyDataColumn<E>> {
+        self.verified_data_columns
+            .iter_mut()
             .find(|d| d.index() == data_column_index)
-            .map(|d| d.clone_arc())
     }
 
     /// Returns a mutable reference to the fixed vector of cached blobs.
@@ -203,50 +193,27 @@ impl<E: EthSpec> PendingComponents<E> {
     }
 
     /// Merges a given set of data columns into the cache.
-    fn merge_data_columns<I, C>(&mut self, kzg_verified_data_columns: I) -> MergedData<E>
+    fn merge_data_columns<I>(&mut self, kzg_verified_data_columns: I) -> Vec<DasColumn<E>>
     where
-        I: IntoIterator<Item = KzgVerifiedCustodyDataColumn<E, C>>,
-        C: DasColumn<E>,
+        I: IntoIterator<Item = KzgVerifiedCustodyDataColumn<E>>,
     {
-        let mut merged_data = MergedData::empty();
+        let mut merged_data = Vec::new();
 
         for data_column in kzg_verified_data_columns {
-            if self.get_cached_data_column(data_column.index()).is_some() {
-                // already have the full column
+            let Some(column) = self.get_cached_data_column_mut(data_column.index()) else {
+                // We do not have the column yet, so we just need to insert it
+                self.verified_data_columns.push(data_column);
                 continue;
-            }
+            };
 
-            if let Some(full) = data_column.try_as_full(self.block.as_ref().map(|b| b.as_block())) {
-                self.verified_partial_columns
-                    .retain(|col| col.index() != full.index());
-                self.verified_data_columns.push(full);
-                continue;
-            }
-
-            let partial = data_column.into_partial();
-            if let Some((idx, cached_partial)) = self
-                .verified_partial_columns
-                .iter_mut()
-                .enumerate()
-                .find(|d| d.1.index() == partial.index())
-            {
-                let did_merge = cached_partial.merge(&partial);
-                if did_merge {
-                    if let Some(block) = &self.block
-                        && let Some(full) = cached_partial.try_as_full(Some(block.as_block()))
-                    {
-                        merged_data.completed_columns.push(full.clone_arc());
-                        self.verified_data_columns.push(full);
-                        self.verified_partial_columns.remove(idx);
-                    } else {
-                        merged_data
-                            .updated_partials
-                            .push(cached_partial.clone_arc());
-                    }
+            match column.merge(data_column) {
+                Ok(true) => {
+                    merged_data.push(column.as_data_column().clone());
                 }
-            } else {
-                merged_data.updated_partials.push(partial.clone_arc());
-                self.verified_partial_columns.push(partial);
+                Ok(false) => {}
+                Err(err) => {
+                    error!("Unexpected error merging data column: {:?}", err);
+                }
             }
         }
 
@@ -256,12 +223,10 @@ impl<E: EthSpec> PendingComponents<E> {
     /// Inserts a new block and revalidates the existing blobs against it.
     ///
     /// Blobs that don't match the new block's commitments are evicted.
-    pub fn merge_block(&mut self, block: DietAvailabilityPendingExecutedBlock<E>) -> MergedData<E> {
+    pub fn merge_block(&mut self, block: DietAvailabilityPendingExecutedBlock<E>) {
         self.insert_executed_block(block);
         let reinsert = self.get_cached_blobs_mut().take();
         self.merge_blobs(reinsert);
-        let reinsert = mem::take(&mut self.verified_partial_columns);
-        self.merge_data_columns(reinsert)
     }
 
     /// Returns Some if the block has received all its required data for import. The return value
@@ -290,12 +255,16 @@ impl<E: EthSpec> PendingComponents<E> {
         let blob_data = if num_expected_blobs == 0 {
             Some(AvailableBlockData::NoData)
         } else if let Some(num_expected_columns) = num_expected_columns_opt {
-            let num_received_columns = self.verified_data_columns.len();
-            match num_received_columns.cmp(&num_expected_columns) {
+            let num_full_columns = self
+                .verified_data_columns
+                .iter()
+                .filter(|col| col.as_data_column().is_complete())
+                .count();
+            match num_full_columns.cmp(&num_expected_columns) {
                 Ordering::Greater => {
                     // Should never happen
                     return Err(AvailabilityCheckError::Unexpected(format!(
-                        "too many columns got {num_received_columns} expected {num_expected_columns}"
+                        "too many columns got {num_full_columns} expected {num_expected_columns}"
                     )));
                 }
                 Ordering::Equal => {
@@ -401,7 +370,6 @@ impl<E: EthSpec> PendingComponents<E> {
             block_root,
             verified_blobs: RuntimeFixedVector::new(vec![None; max_len]),
             verified_data_columns: vec![],
-            verified_partial_columns: vec![],
             block: None,
             reconstruction_started: false,
             span,
@@ -474,7 +442,7 @@ pub struct DataAvailabilityCheckerInner<T: BeaconChainTypes> {
 // the current usage, as it's deconstructed immediately.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ReconstructColumnsDecision<E: EthSpec> {
-    Yes(Vec<KzgVerifiedCustodyDataColumn<E, DataColumnSidecar<E>>>),
+    Yes(Vec<KzgVerifiedCustodyDataColumn<E>>),
     No(&'static str),
 }
 
@@ -594,13 +562,12 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
 
     #[allow(clippy::type_complexity)]
     pub fn put_kzg_verified_data_columns<
-        I: IntoIterator<Item = KzgVerifiedCustodyDataColumn<T::EthSpec, C>>,
-        C: DasColumn<T::EthSpec>,
+        I: IntoIterator<Item = KzgVerifiedCustodyDataColumn<T::EthSpec>>,
     >(
         &self,
         block_root: Hash256,
         kzg_verified_data_columns: I,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<Availability<T::EthSpec>, AvailabilityCheckError> {
         let mut kzg_verified_data_columns = kzg_verified_data_columns.into_iter().peekable();
         let Some(epoch) = kzg_verified_data_columns.peek().map(|verified_blob| {
@@ -803,7 +770,7 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
     pub fn put_executed_block(
         &self,
         executed_block: AvailabilityPendingExecutedBlock<T::EthSpec>,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<Availability<T::EthSpec>, AvailabilityCheckError> {
         let epoch = executed_block.as_block().epoch();
         let block_root = executed_block.import_data.block_root;

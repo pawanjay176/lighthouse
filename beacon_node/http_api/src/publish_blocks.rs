@@ -206,7 +206,7 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlock<T>>(
 
     let sender_clone = network_tx.clone();
     let spec = chain.spec.clone();
-    let data_publish_fn = move |merged_data: MergedData<T::EthSpec>| {
+    let data_publish_fn = move |merged_data: Vec<DasColumn<T::EthSpec>>| {
         debug!(
             partial = merged_data.updated_partials.len(),
             full = merged_data.completed_columns.len(),
@@ -392,7 +392,7 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlock<T>>(
 type BuildDataSidecarTaskResult<T> = Result<
     (
         Vec<Option<GossipVerifiedBlob<T>>>,
-        Vec<GossipVerifiedDataColumn<T, DataColumnSidecar<<T as BeaconChainTypes>::EthSpec>>>,
+        Vec<GossipVerifiedDataColumn<T>::EthSpec>>>,
     ),
     Rejection,
 >;
@@ -544,7 +544,7 @@ fn publish_blob_sidecars<T: BeaconChainTypes>(
 
 fn publish_column_sidecars<T: BeaconChainTypes>(
     sender_clone: &UnboundedSender<NetworkMessage<T::EthSpec>>,
-    data_column_sidecars: &[GossipVerifiedDataColumn<T, DataColumnSidecar<T::EthSpec>>],
+    data_column_sidecars: &[GossipVerifiedDataColumn<T>],
     chain: &BeaconChain<T>,
 ) -> Result<(), BlockError> {
     let malicious_withhold_count = chain.config.malicious_withhold_count;

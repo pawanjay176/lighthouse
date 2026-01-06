@@ -23,7 +23,7 @@ use crate::chain_config::ChainConfig;
 use crate::custody_context::CustodyContextSsz;
 use crate::data_availability_checker::{
     Availability, AvailabilityCheckError, AvailableBlock, AvailableBlockData,
-    DataAvailabilityChecker, DataColumnReconstructionResult, MergedData,
+    DataAvailabilityChecker, DataColumnReconstructionResult,
 };
 use crate::data_column_verification::{GossipDataColumnError, GossipVerifiedDataColumn};
 use crate::early_attester_cache::EarlyAttesterCache;
@@ -2189,7 +2189,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         self: &Arc<Self>,
         data_column_sidecar: Arc<DataColumnSidecar<T::EthSpec>>,
         subnet_id: DataColumnSubnetId,
-    ) -> Result<GossipVerifiedDataColumn<T, DataColumnSidecar<T::EthSpec>>, GossipDataColumnError>
+    ) -> Result<GossipVerifiedDataColumn<T>, GossipDataColumnError>
     {
         metrics::inc_counter(&metrics::DATA_COLUMN_SIDECAR_PROCESSING_REQUESTS);
         let _timer = metrics::start_timer(&metrics::DATA_COLUMN_SIDECAR_GOSSIP_VERIFICATION_TIMES);
@@ -2203,7 +2203,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         self: &Arc<Self>,
         data_column_sidecar: Arc<VerifiablePartialDataColumn<T::EthSpec>>,
     ) -> Result<
-        GossipVerifiedDataColumn<T, VerifiablePartialDataColumn<T::EthSpec>>,
+        GossipVerifiedDataColumn<T>,
         GossipDataColumnError,
     > {
         metrics::inc_counter(&metrics::PARTIAL_DATA_COLUMN_SIDECAR_PROCESSING_REQUESTS);
@@ -3055,11 +3055,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Cache the data columns in the processing cache, process it, then evict it from the cache if it was
     /// imported or errors.
     #[instrument(skip_all, level = "debug")]
-    pub async fn process_gossip_data_columns<C: DasColumn<T::EthSpec>>(
+    pub async fn process_gossip_data_columns(
         self: &Arc<Self>,
-        data_columns: Vec<GossipVerifiedDataColumn<T, C>>,
+        data_columns: Vec<GossipVerifiedDataColumn<T>>,
         publish_fn: impl FnOnce() -> Result<(), BlockError>,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<AvailabilityProcessingStatus, BlockError> {
         let Ok((slot, block_root)) = data_columns
             .iter()
@@ -3191,13 +3191,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         }
     }
 
-    fn emit_sse_data_column_sidecar_events<'a, I, C>(
+    fn emit_sse_data_column_sidecar_events<'a, I>(
         self: &Arc<Self>,
         block_root: &Hash256,
         data_columns_iter: I,
     ) where
-        I: Iterator<Item = &'a C>,
-        C: DasColumn<T::EthSpec> + 'a,
+        I: Iterator<Item = &'a DasColumn<T::EthSpec>>,
     {
         if let Some(event_handler) = self.event_handler.as_ref()
             && event_handler.has_data_column_sidecar_subscribers()
@@ -3356,7 +3355,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         notify_execution_layer: NotifyExecutionLayer,
         block_source: BlockImportSource,
         publish_fn: impl FnOnce() -> Result<(), BlockError>,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<AvailabilityProcessingStatus, BlockError> {
         let block_slot = unverified_block.block().slot();
 
@@ -3537,7 +3536,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     async fn check_block_availability_and_import(
         self: &Arc<Self>,
         block: AvailabilityPendingExecutedBlock<T::EthSpec>,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<AvailabilityProcessingStatus, BlockError> {
         let slot = block.block.slot();
         let availability = self
@@ -3567,13 +3566,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     /// Checks if the provided data column can make any cached blocks available, and imports immediately
     /// if so, otherwise caches the data column in the data availability checker.
-    async fn check_gossip_data_columns_availability_and_import<C: DasColumn<T::EthSpec>>(
+    async fn check_gossip_data_columns_availability_and_import(
         self: &Arc<Self>,
         slot: Slot,
         block_root: Hash256,
-        data_columns: Vec<GossipVerifiedDataColumn<T, C>>,
+        data_columns: Vec<GossipVerifiedDataColumn<T>>,
         publish_fn: impl FnOnce() -> Result<(), BlockError>,
-        data_publish_fn: impl FnOnce(MergedData<T::EthSpec>),
+        data_publish_fn: impl FnOnce(Vec<DasColumn<T::EthSpec>>),
     ) -> Result<AvailabilityProcessingStatus, BlockError> {
         if let Some(slasher) = self.slasher.as_ref() {
             for header in data_columns.iter().filter_map(|c| c.signed_block_header()) {
@@ -3693,13 +3692,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .await
     }
 
-    fn check_data_column_sidecar_header_signature_and_slashability<
-        'a,
-        C: DasColumn<T::EthSpec> + 'a,
-    >(
+    fn check_data_column_sidecar_header_signature_and_slashability<'a>(
         self: &Arc<Self>,
         block_root: Hash256,
-        custody_columns: impl IntoIterator<Item = &'a C>,
+        custody_columns: impl IntoIterator<Item = &'a DasColumn<T::EthSpec>>,
     ) -> Result<(), BlockError> {
         let mut slashable_cache = self.observed_slashable.write();
         // Process all unique block headers - previous logic assumed all headers were identical and

@@ -50,14 +50,13 @@ pub fn validate_blob<E: EthSpec>(
 }
 
 /// Validate a batch of `DataColumnSidecar`.
-pub fn validate_data_columns<'a, E: EthSpec, I, A, C>(
+pub fn validate_data_columns<'a, E: EthSpec, I, A>(
     kzg: &Kzg,
     data_column_iter: I,
 ) -> Result<(), (Option<u64>, KzgError)>
 where
     I: Iterator<Item = &'a A> + Clone,
-    A: AsRef<C> + 'a,
-    C: DasColumn<E> + 'a,
+    A: AsRef<DasColumn<E>> + 'a,
 {
     let mut cells = Vec::new();
     let mut proofs = Vec::new();
@@ -527,11 +526,11 @@ pub fn reconstruct_blobs<E: EthSpec>(
 /// Reconstruct all data columns from a subset of data column sidecars (requires at least 50%).
 pub fn reconstruct_data_columns<E: EthSpec>(
     kzg: &Kzg,
-    mut data_columns: Vec<Arc<DataColumnSidecar<E>>>,
+    mut data_columns: Vec<&DasColumn<E>>,
     spec: &ChainSpec,
 ) -> Result<DataColumnSidecarList<E>, KzgError> {
     // Sort data columns by index to ensure ascending order for KZG operations
-    data_columns.sort_unstable_by_key(|dc| dc.index);
+    data_columns.sort_unstable_by_key(|dc| dc.index());
 
     let first_data_column = data_columns
         .first()
@@ -539,7 +538,7 @@ pub fn reconstruct_data_columns<E: EthSpec>(
             "data_columns should have at least one element".to_string(),
         ))?;
 
-    let num_of_blobs = first_data_column.kzg_commitments.len();
+    let num_of_blobs = first_data_column.kzg_commitments().len();
 
     let blob_cells_and_proofs_vec =
         (0..num_of_blobs)
@@ -548,14 +547,16 @@ pub fn reconstruct_data_columns<E: EthSpec>(
                 let mut cells: Vec<KzgCellRef> = vec![];
                 let mut cell_ids: Vec<u64> = vec![];
                 for data_column in &data_columns {
-                    let cell = data_column.column.get(row_index).ok_or(
+                    let cell = data_column.column().get(row_index).ok_or(
                         KzgError::InconsistentArrayLength(format!(
                             "Missing data column at row index {row_index}"
                         )),
                     )?;
 
-                    cells.push(ssz_cell_to_crypto_cell::<E>(cell)?);
-                    cell_ids.push(data_column.index);
+                    if let Some((cell, _)) = cell {
+                        cells.push(ssz_cell_to_crypto_cell::<E>(cell)?);
+                        cell_ids.push(data_column.index());
+                    }
                 }
                 kzg.recover_cells_and_compute_kzg_proofs(&cell_ids, &cells)
             })
@@ -563,9 +564,9 @@ pub fn reconstruct_data_columns<E: EthSpec>(
 
     // Clone sidecar elements from existing data column, no need to re-compute
     build_data_column_sidecars(
-        first_data_column.kzg_commitments.clone(),
-        first_data_column.kzg_commitments_inclusion_proof.clone(),
-        first_data_column.signed_block_header.clone(),
+        first_data_column.kzg_commitments().clone(),
+        first_data_column.kzg_commitments_inclusion_proof().clone(),
+        first_data_column.signed_block_header().clone(),
         blob_cells_and_proofs_vec,
         spec,
     )

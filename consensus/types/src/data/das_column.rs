@@ -289,7 +289,7 @@ impl<E: EthSpec> DasColumn<E> {
     /// Merge another DasColumn into this one
     /// Returns Ok(true) if any cells were added, Ok(false) if no changes
     /// Returns Err if columns are incompatible or have conflicting data
-    pub fn merge(&mut self, other: &DasColumn<E>) -> Result<bool, MergeError> {
+    pub fn merge(&mut self, other: DasColumn<E>) -> Result<bool, MergeError> {
         // Validate compatibility
         if self.slot != other.slot {
             return Err(MergeError::SlotMismatch {
@@ -317,17 +317,18 @@ impl<E: EthSpec> DasColumn<E> {
 
         // Iterate both columns in parallel
         for (idx, (self_cell, other_cell)) in
-            self.column.iter_mut().zip(other.column.iter()).enumerate()
+            self.column.iter_mut().zip(other.column.into_iter()).enumerate()
         {
-            match (self_cell.as_ref(), other_cell.as_ref()) {
+            match (self_cell.as_ref(), other_cell) {
                 (None, Some(cell_proof)) => {
                     // Copy cell/proof pair from other
-                    *self_cell = Some(cell_proof.clone());
+                    *self_cell = Some(cell_proof);
                     did_merge = true;
                 }
                 (Some(self_data), Some(other_data)) => {
                     // Verify cell/proof pairs match
-                    if self_data != other_data {
+                    // TODO maybe remove this sanity check?
+                    if *self_data != other_data {
                         return Err(MergeError::DataConflict { index: idx });
                     }
                 }
