@@ -1,20 +1,15 @@
 use crate::beacon_block_body::KzgCommitments;
-use crate::data::das_column::{CellWithMetadata, DasColumn};
 use crate::data_column_sidecar::{Cell, DataColumn};
 use crate::test_utils::TestRandom;
 use crate::{AbstractExecPayload, ColumnIndex, DataColumnSidecar};
-use crate::{EthSpec, ForkName, Hash256, SignedBeaconBlock, SignedBeaconBlockHeader, Slot};
-use context_deserialize::context_deserialize;
+use crate::{EthSpec, Hash256, SignedBeaconBlock, Slot};
 use educe::Educe;
 use kzg::KzgProof;
-use serde::{Deserialize, Serialize};
 use ssz::{BitList, Encode};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
-use std::borrow::Cow;
 use std::sync::Arc;
 use test_random_derive::TestRandom;
-use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 pub type CellBitmap<E> = BitList<<E as EthSpec>::MaxBlobCommitmentsPerBlock>;

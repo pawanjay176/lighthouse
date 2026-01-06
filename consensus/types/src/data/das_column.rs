@@ -7,23 +7,20 @@ use crate::data_column_sidecar::Cell;
 use crate::partial_data_column_sidecar::{
     CellBitmap, DanglingPartialDataColumn, PartialDataColumnSidecar, VerifiablePartialDataColumn,
 };
-use crate::{
-    BeaconBlockHeader, ColumnIndex, DataColumnSidecar, EthSpec, Hash256, SignedBeaconBlock,
-    SignedBeaconBlockHeader, Slot,
-};
-use bls::Signature;
+use crate::{ColumnIndex, DataColumnSidecar, EthSpec, Hash256, SignedBeaconBlockHeader, Slot};
 use kzg::{KzgCommitment, KzgProof};
+use safe_arith::{ArithError, SafeArith};
 use ssz_types::{FixedVector, VariableList};
-use std::borrow::Cow;
-use std::sync::Arc;
 use tree_hash::TreeHash;
+
+type OptionCellAndProof<E> = Option<(Cell<E>, KzgProof)>;
 
 #[derive(Clone)]
 pub struct DasColumn<E: EthSpec> {
     block_root: Hash256,
     slot: Slot,
     index: ColumnIndex,
-    column: VariableList<Option<Arc<(Cell<E>, KzgProof)>>, E::MaxBlobCommitmentsPerBlock>,
+    column: VariableList<OptionCellAndProof<E>, E::MaxBlobCommitmentsPerBlock>,
     /// All the KZG commitments and proofs associated with the block, used for verifying sample cells.
     kzg_commitments: KzgCommitments<E>,
     signed_block_header: SignedBeaconBlockHeader,
@@ -44,9 +41,7 @@ impl<E: EthSpec> DasColumn<E> {
         self.block_root
     }
 
-    pub fn column(
-        &self,
-    ) -> &VariableList<Option<Arc<(Cell<E>, KzgProof)>>, E::MaxBlobCommitmentsPerBlock> {
+    pub fn column(&self) -> &VariableList<OptionCellAndProof<E>, E::MaxBlobCommitmentsPerBlock> {
         &self.column
     }
 
@@ -87,7 +82,7 @@ impl<E: EthSpec> DasColumn<E> {
         let commitments = self.kzg_commitments();
 
         self.column.iter().enumerate().map(move |(idx, data)| {
-            data.as_deref().and_then(|(cell, proof)| {
+            data.as_ref().and_then(|(cell, proof)| {
                 commitments.get(idx).map(|commitment| CellWithMetadata {
                     cell,
                     proof,
@@ -134,8 +129,6 @@ impl<E: EthSpec> DasColumn<E> {
     }
 }
 
-// Conversions FROM external types TO DasColumn
-
 impl<E: EthSpec> From<DataColumnSidecar<E>> for DasColumn<E> {
     fn from(sidecar: DataColumnSidecar<E>) -> Self {
         // Pair each cell with its proof
@@ -143,7 +136,7 @@ impl<E: EthSpec> From<DataColumnSidecar<E>> for DasColumn<E> {
             .column
             .iter()
             .zip(sidecar.kzg_proofs.iter())
-            .map(|(cell, proof)| Some(Arc::new((cell.clone(), *proof))))
+            .map(|(cell, proof)| Some((cell.clone(), *proof)))
             .collect::<Vec<_>>();
 
         let column = VariableList::new(column).expect("Column length within bounds");
@@ -172,30 +165,37 @@ impl<E: EthSpec> DasColumn<E> {
         kzg_commitments: KzgCommitments<E>,
         signed_block_header: SignedBeaconBlockHeader,
         kzg_commitments_inclusion_proof: FixedVector<Hash256, E::KzgCommitmentsInclusionProofDepth>,
-    ) -> Self {
+    ) -> Result<Self, ConversionError> {
         let sidecar = &partial.sidecar;
         let bitmap = &sidecar.cells_present_bitmap;
 
-        // Create full-length vector initialized with None
-        let mut column_vec = vec![None; bitmap.len()];
-
         // Iterate bitmap to find present cell positions and pair cells with proofs
         let mut packed_idx = 0;
-        for (idx, present) in bitmap.iter().enumerate() {
-            if present {
-                if let (Some(cell), Some(proof)) = (
-                    sidecar.column.get(packed_idx),
-                    sidecar.kzg_proofs.get(packed_idx),
-                ) {
-                    column_vec[idx] = Some(Arc::new((cell.clone(), *proof)));
-                }
-                packed_idx += 1;
-            }
-        }
+        let column_vec = bitmap
+            .iter()
+            .map(|present| {
+                present
+                    .then(|| {
+                        if let (Some(cell), Some(proof)) = (
+                            sidecar.column.get(packed_idx),
+                            sidecar.kzg_proofs.get(packed_idx),
+                        ) {
+                            packed_idx = packed_idx
+                                .safe_add(1)
+                                .map_err(ConversionError::ArithError)?;
+                            Ok((cell.clone(), *proof))
+                        } else {
+                            Err(ConversionError::InconsistentPartialDataColumn)
+                        }
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let column = VariableList::new(column_vec).expect("Column length within bounds");
+        let column = VariableList::new(column_vec)
+            .map_err(|_| ConversionError::UnexpectedOutOfSpecBounds)?;
 
-        DasColumn {
+        Ok(DasColumn {
             block_root: partial.block_root,
             slot,
             index: partial.index,
@@ -203,15 +203,15 @@ impl<E: EthSpec> DasColumn<E> {
             kzg_commitments,
             signed_block_header,
             kzg_commitments_inclusion_proof,
-        }
+        })
     }
 
     /// Convert DasColumn to DanglingPartialDataColumn
     /// Returns error if no cells are present
-    pub fn to_partial(&self) -> Result<DanglingPartialDataColumn<E>, PartialConversionError> {
+    pub fn to_partial(&self) -> Result<DanglingPartialDataColumn<E>, ConversionError> {
         // Create bitmap with length = column.len()
         let mut bitmap = CellBitmap::<E>::with_capacity(self.column.len())
-            .map_err(|_| PartialConversionError::BitmapCreation)?;
+            .map_err(|_| ConversionError::UnexpectedOutOfSpecBounds)?;
 
         // Create empty packed vectors for cells and proofs
         let mut packed_column = Vec::new();
@@ -223,26 +223,28 @@ impl<E: EthSpec> DasColumn<E> {
                 Some(cell_proof) => {
                     bitmap
                         .set(idx, true)
-                        .map_err(|_| PartialConversionError::BitmapSet)?;
-                    let (cell, proof) = cell_proof.as_ref();
+                        .map_err(|_| ConversionError::BitmapSet)?;
+                    let (cell, proof) = cell_proof;
                     packed_column.push(cell.clone());
                     packed_proofs.push(*proof);
                 }
                 None => {
                     bitmap
                         .set(idx, false)
-                        .map_err(|_| PartialConversionError::BitmapSet)?;
+                        .map_err(|_| ConversionError::BitmapSet)?;
                 }
             }
         }
 
         // Validate at least one cell present
         if packed_column.is_empty() {
-            return Err(PartialConversionError::NoPresentCells);
+            return Err(ConversionError::NoPresentCells);
         }
 
-        let column = VariableList::new(packed_column).expect("Column length within bounds");
-        let kzg_proofs = VariableList::new(packed_proofs).expect("Proofs length within bounds");
+        let column = VariableList::new(packed_column)
+            .map_err(|_| ConversionError::UnexpectedOutOfSpecBounds)?;
+        let kzg_proofs = VariableList::new(packed_proofs)
+            .map_err(|_| ConversionError::UnexpectedOutOfSpecBounds)?;
 
         Ok(DanglingPartialDataColumn {
             block_root: self.block_root,
@@ -256,29 +258,23 @@ impl<E: EthSpec> DasColumn<E> {
     }
 
     /// Convert DasColumn to DataColumnSidecar if all cells are present
-    pub fn to_full(&self) -> Result<DataColumnSidecar<E>, FullConversionError> {
-        // Validate all cells are present
-        if !self.is_complete() {
-            let present = self.cell_count_present();
-            let total = self.cell_count_total();
-            return Err(FullConversionError::IncompleteCells { present, total });
-        }
-
+    pub fn to_full(&self) -> Result<DataColumnSidecar<E>, ConversionError> {
         // Unpack all cell/proof pairs to create separate dense lists
         let mut cells = Vec::new();
         let mut proofs = Vec::new();
 
         for cell_data in self.column.iter() {
-            let (cell, proof) = cell_data
-                .as_ref()
-                .expect("is_complete() check ensures all cells are Some")
-                .as_ref();
+            let Some((cell, proof)) = cell_data else {
+                return Err(ConversionError::IncompleteCells);
+            };
             cells.push(cell.clone());
             proofs.push(*proof);
         }
 
-        let column = VariableList::new(cells).expect("Column length within bounds");
-        let kzg_proofs = VariableList::new(proofs).expect("Proofs length within bounds");
+        let column =
+            VariableList::new(cells).map_err(|_| ConversionError::UnexpectedOutOfSpecBounds)?;
+        let kzg_proofs =
+            VariableList::new(proofs).map_err(|_| ConversionError::UnexpectedOutOfSpecBounds)?;
 
         Ok(DataColumnSidecar {
             index: self.index,
@@ -288,15 +284,6 @@ impl<E: EthSpec> DasColumn<E> {
             signed_block_header: self.signed_block_header.clone(),
             kzg_commitments_inclusion_proof: self.kzg_commitments_inclusion_proof.clone(),
         })
-    }
-
-    /// Try to convert to full DataColumnSidecar
-    pub fn as_full<'a>(
-        &'a self,
-        _block: Option<&SignedBeaconBlock<E>>,
-    ) -> Option<Cow<'a, DataColumnSidecar<E>>> {
-        // Try direct conversion - now always possible if complete
-        self.to_full().ok().map(Cow::Owned)
     }
 
     /// Merge another DasColumn into this one
@@ -355,16 +342,14 @@ impl<E: EthSpec> DasColumn<E> {
 }
 
 #[derive(Debug)]
-pub enum PartialConversionError {
+pub enum ConversionError {
     NoPresentCells,
-    BitmapCreation,
+    UnexpectedOutOfSpecBounds,
     BitmapSet,
+    InconsistentPartialDataColumn,
+    ArithError(ArithError),
     KzgProofMissing { index: usize },
-}
-
-#[derive(Debug)]
-pub enum FullConversionError {
-    IncompleteCells { present: usize, total: usize },
+    IncompleteCells,
     MissingProofComponents,
 }
 

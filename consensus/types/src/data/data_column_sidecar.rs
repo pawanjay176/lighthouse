@@ -1,10 +1,3 @@
-use crate::SignedBeaconBlock;
-use crate::data::das_column::CellWithMetadata;
-use crate::data::das_column::DasColumn;
-use crate::data::partial_data_column_sidecar::CellBitmap;
-use crate::data::partial_data_column_sidecar::DanglingPartialDataColumn;
-use crate::data::partial_data_column_sidecar::PartialDataColumnSidecar;
-use crate::data::partial_data_column_sidecar::VerifiablePartialDataColumn;
 use std::sync::Arc;
 
 use bls::Signature;
@@ -13,12 +6,11 @@ use educe::Educe;
 use kzg::{KzgCommitment, KzgProof};
 use merkle_proof::verify_merkle_proof;
 use safe_arith::ArithError;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 use ssz_types::Error as SszError;
 use ssz_types::{FixedVector, VariableList};
-use std::borrow::Cow;
 use test_random_derive::TestRandom;
 use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;

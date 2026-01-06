@@ -1019,7 +1019,7 @@ fn test_tcp_columns_by_root_chunked_rpc() {
                 },
                 signature: Signature::empty(),
             },
-            column: vec![vec![0; E::bytes_per_cell()].try_into().unwrap()]
+            column: vec![Arc::new(vec![0; E::bytes_per_cell()].try_into().unwrap())]
                 .try_into()
                 .unwrap(),
             kzg_commitments: vec![KzgCommitment::empty_for_testing()].try_into().unwrap(),
@@ -1164,7 +1164,7 @@ fn test_tcp_columns_by_range_chunked_rpc() {
                 },
                 signature: Signature::empty(),
             },
-            column: vec![vec![0; E::bytes_per_cell()].try_into().unwrap()]
+            column: vec![Arc::new(vec![0; E::bytes_per_cell()].try_into().unwrap())]
                 .try_into()
                 .unwrap(),
             kzg_commitments: vec![KzgCommitment::empty_for_testing()].try_into().unwrap(),
