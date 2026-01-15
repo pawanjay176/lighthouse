@@ -4,7 +4,8 @@ use beacon_chain::blob_verification::{GossipBlobError, observe_gossip_blob};
 use beacon_chain::block_verification_types::RpcBlock;
 use beacon_chain::data_column_verification::{GossipDataColumnError, observe_gossip_data_column};
 use beacon_chain::fetch_blobs::{
-    EngineGetBlobsOutput, FetchEngineBlobError, fetch_and_process_engine_blobs,
+    EngineGetBlobsOutput, FetchBlobsContext, FetchEngineBlobError,
+    fetch_and_process_engine_blobs_v1, fetch_and_process_engine_blobs_v2,
 };
 use beacon_chain::{AvailabilityProcessingStatus, BeaconChain, BeaconChainTypes, BlockError};
 use beacon_processor::{
@@ -783,15 +784,34 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             }
         };
 
-        match fetch_and_process_engine_blobs(
-            self.chain.clone(),
-            block_root,
-            block.clone(),
-            custody_columns,
-            publish_fn,
-        )
-        .await
-        {
+        let result = if self.chain.spec.is_peer_das_enabled_for_epoch(epoch) {
+            // Use v2 API for PeerDAS
+            let Some(context) = FetchBlobsContext::from_block(&block, block_root) else {
+                debug!(
+                    %block_root,
+                    "Fetch blobs not triggered - no blobs in block or pre-Deneb"
+                );
+                return;
+            };
+            fetch_and_process_engine_blobs_v2(
+                self.chain.clone(),
+                context,
+                custody_columns,
+                publish_fn,
+            )
+            .await
+        } else {
+            // Use v1 API for pre-PeerDAS
+            fetch_and_process_engine_blobs_v1(
+                self.chain.clone(),
+                block_root,
+                block.clone(),
+                publish_fn,
+            )
+            .await
+        };
+
+        match result {
             Ok(Some(availability)) => match availability {
                 AvailabilityProcessingStatus::Imported(_) => {
                     debug!(

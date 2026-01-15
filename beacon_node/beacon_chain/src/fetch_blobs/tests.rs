@@ -1,7 +1,8 @@
 use crate::AvailabilityProcessingStatus;
 use crate::fetch_blobs::fetch_blobs_beacon_adapter::MockFetchBlobsBeaconAdapter;
 use crate::fetch_blobs::{
-    EngineGetBlobsOutput, FetchEngineBlobError, fetch_and_process_engine_blobs_inner,
+    EngineGetBlobsOutput, FetchBlobsContext, FetchEngineBlobError,
+    fetch_and_process_blobs_v1_inner, fetch_and_process_blobs_v2_inner,
 };
 use crate::test_utils::{EphemeralHarnessType, get_kzg};
 use bls::Signature;
@@ -26,29 +27,23 @@ mod get_blobs_v2 {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_fetch_blobs_v2_no_blobs_in_block() {
         let mut mock_adapter = mock_beacon_adapter(ForkName::Fulu);
-        let (publish_fn, _s) = mock_publish_fn();
+        let (_publish_fn, _s) = mock_publish_fn();
         let block = SignedBeaconBlock::<E>::Fulu(SignedBeaconBlockFulu {
             message: BeaconBlockFulu::empty(mock_adapter.spec()),
             signature: Signature::empty(),
         });
         let block_root = block.canonical_root();
 
+        // No context can be created from a block without blobs
+        let context = FetchBlobsContext::from_block(&block, block_root);
+        assert!(
+            context.is_none(),
+            "context should be None for block without blobs"
+        );
+
         // Expectations: engine fetch blobs should not be triggered
         mock_adapter.expect_get_blobs_v2().times(0);
         mock_adapter.expect_process_engine_blobs().times(0);
-
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            Arc::new(block),
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
-
-        assert_eq!(processing_status, None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -63,15 +58,12 @@ mod get_blobs_v2 {
 
         // Trigger fetch blobs on the block
         let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let context = FetchBlobsContext::from_block(&block, block_root)
+            .expect("context should be Some for block with blobs");
+        let processing_status =
+            fetch_and_process_blobs_v2_inner(mock_adapter, context, &custody_columns, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         assert_eq!(processing_status, None);
     }
@@ -91,15 +83,12 @@ mod get_blobs_v2 {
 
         // Trigger fetch blobs on the block
         let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let context = FetchBlobsContext::from_block(&block, block_root)
+            .expect("context should be Some for block with blobs");
+        let processing_status =
+            fetch_and_process_blobs_v2_inner(mock_adapter, context, &custody_columns, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         assert_eq!(processing_status, None);
         assert_eq!(
@@ -124,15 +113,12 @@ mod get_blobs_v2 {
 
         // Trigger fetch blobs on the block
         let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let context = FetchBlobsContext::from_block(&block, block_root)
+            .expect("context should be Some for block with blobs");
+        let processing_status =
+            fetch_and_process_blobs_v2_inner(mock_adapter, context, &custody_columns, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         assert_eq!(processing_status, None);
         assert_eq!(
@@ -163,15 +149,12 @@ mod get_blobs_v2 {
 
         // **WHEN**: Trigger `fetch_blobs` on the block
         let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let context = FetchBlobsContext::from_block(&block, block_root)
+            .expect("context should be Some for block with blobs");
+        let processing_status =
+            fetch_and_process_blobs_v2_inner(mock_adapter, context, &custody_columns, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         // **THEN**: Should NOT be processed and no columns should be published.
         assert_eq!(processing_status, None);
@@ -205,15 +188,12 @@ mod get_blobs_v2 {
 
         // Trigger fetch blobs on the block
         let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let context = FetchBlobsContext::from_block(&block, block_root)
+            .expect("context should be Some for block with blobs");
+        let processing_status =
+            fetch_and_process_blobs_v2_inner(mock_adapter, context, &custody_columns, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         assert_eq!(
             processing_status,
@@ -253,7 +233,6 @@ mod get_blobs_v1 {
     use super::*;
     use crate::block_verification_types::AsBlock;
     use std::collections::HashSet;
-    use types::ColumnIndex;
 
     const ELECTRA_FORK: ForkName = ForkName::Electra;
 
@@ -270,12 +249,10 @@ mod get_blobs_v1 {
         mock_adapter.expect_get_blobs_v1().times(0);
 
         // WHEN: Trigger fetch blobs on the block
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
+        let processing_status = fetch_and_process_blobs_v1_inner(
             mock_adapter,
             block_root,
             Arc::new(block_no_blobs),
-            &custody_columns,
             publish_fn,
         )
         .await
@@ -297,16 +274,10 @@ mod get_blobs_v1 {
         mock_get_blobs_v1_response(&mut mock_adapter, vec![None; expected_blob_count]);
 
         // WHEN: Trigger fetch blobs on the block
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let processing_status =
+            fetch_and_process_blobs_v1_inner(mock_adapter, block_root, block, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         // THEN: No blob is processed
         assert_eq!(processing_status, None);
@@ -343,16 +314,10 @@ mod get_blobs_v1 {
         );
 
         // WHEN: Trigger fetch blobs on the block
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let processing_status =
+            fetch_and_process_blobs_v1_inner(mock_adapter, block_root, block, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         // THEN: Returned blobs are processed and published
         assert_eq!(
@@ -383,16 +348,10 @@ mod get_blobs_v1 {
         mock_fork_choice_contains_block(&mut mock_adapter, vec![block.canonical_root()]);
 
         // WHEN: Trigger fetch blobs on the block
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let processing_status =
+            fetch_and_process_blobs_v1_inner(mock_adapter, block_root, block, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         // THEN: Returned blobs should NOT be processed or published.
         assert_eq!(processing_status, None);
@@ -431,16 +390,10 @@ mod get_blobs_v1 {
             .returning(move |_, _| Some(all_blob_indices.clone()));
 
         // **WHEN**: Trigger `fetch_blobs` on the block
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let processing_status =
+            fetch_and_process_blobs_v1_inner(mock_adapter, block_root, block, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         // **THEN**: Should NOT be processed and no blobs should be published.
         assert_eq!(processing_status, None);
@@ -475,16 +428,10 @@ mod get_blobs_v1 {
         );
 
         // Trigger fetch blobs on the block
-        let custody_columns: [ColumnIndex; 3] = [0, 1, 2];
-        let processing_status = fetch_and_process_engine_blobs_inner(
-            mock_adapter,
-            block_root,
-            block,
-            &custody_columns,
-            publish_fn,
-        )
-        .await
-        .expect("fetch blobs should succeed");
+        let processing_status =
+            fetch_and_process_blobs_v1_inner(mock_adapter, block_root, block, publish_fn)
+                .await
+                .expect("fetch blobs should succeed");
 
         // THEN all fetched blobs are processed and published
         assert_eq!(
