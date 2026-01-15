@@ -8,6 +8,7 @@ use crate::block_verification_types::{
 };
 use crate::data_availability_checker::{Availability, AvailabilityCheckError};
 use crate::data_column_verification::KzgVerifiedCustodyDataColumn;
+use crate::metrics;
 use crate::{BeaconChainTypes, BlockProcessStatus};
 use lighthouse_tracing::SPAN_PENDING_COMPONENTS;
 use lru::LruCache;
@@ -433,19 +434,22 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
 
     /// Returns true if the block root is known, without altering the LRU ordering
     pub fn get_cached_block(&self, block_root: &Hash256) -> Option<BlockProcessStatus<T::EthSpec>> {
-        self.critical
-            .read()
-            .peek(block_root)
-            .and_then(|pending_components| {
-                pending_components.block.as_ref().map(|block| match block {
-                    CachedBlock::PreExecution(b, source) => {
-                        BlockProcessStatus::NotValidated(b.clone(), *source)
-                    }
-                    CachedBlock::Executed(b) => {
-                        BlockProcessStatus::ExecutionValidated(b.block_cloned())
-                    }
-                })
+        let read_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_READ_LOCK_WAIT_TIMES,
+            );
+            self.critical.read()
+        };
+        read_lock.peek(block_root).and_then(|pending_components| {
+            pending_components.block.as_ref().map(|block| match block {
+                CachedBlock::PreExecution(b, source) => {
+                    BlockProcessStatus::NotValidated(b.clone(), *source)
+                }
+                CachedBlock::Executed(b) => {
+                    BlockProcessStatus::ExecutionValidated(b.block_cloned())
+                }
             })
+        })
     }
 
     /// Fetch a blob from the cache without affecting the LRU ordering
@@ -453,7 +457,13 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         &self,
         blob_id: &BlobIdentifier,
     ) -> Result<Option<Arc<BlobSidecar<T::EthSpec>>>, AvailabilityCheckError> {
-        if let Some(pending_components) = self.critical.read().peek(&blob_id.block_root) {
+        let read_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_READ_LOCK_WAIT_TIMES,
+            );
+            self.critical.read()
+        };
+        if let Some(pending_components) = read_lock.peek(&blob_id.block_root) {
             Ok(pending_components
                 .verified_blobs
                 .get(blob_id.index as usize)
@@ -470,16 +480,19 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         &self,
         block_root: Hash256,
     ) -> Option<DataColumnSidecarList<T::EthSpec>> {
-        self.critical
-            .read()
-            .peek(&block_root)
-            .map(|pending_components| {
-                pending_components
-                    .verified_data_columns
-                    .iter()
-                    .map(|col| col.clone_arc())
-                    .collect()
-            })
+        let read_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_READ_LOCK_WAIT_TIMES,
+            );
+            self.critical.read()
+        };
+        read_lock.peek(&block_root).map(|pending_components| {
+            pending_components
+                .verified_data_columns
+                .iter()
+                .map(|col| col.clone_arc())
+                .collect()
+        })
     }
 
     pub fn peek_pending_components<R, F: FnOnce(Option<&PendingComponents<T::EthSpec>>) -> R>(
@@ -487,7 +500,13 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         block_root: &Hash256,
         f: F,
     ) -> R {
-        f(self.critical.read().peek(block_root))
+        let read_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_READ_LOCK_WAIT_TIMES,
+            );
+            self.critical.read()
+        };
+        f(read_lock.peek(block_root))
     }
 
     /// Puts the KZG verified blobs into the availability cache as pending components.
@@ -588,7 +607,13 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         )? {
             // Explicitly drop read lock before acquiring write lock
             drop(pending_components);
-            if let Some(components) = self.critical.write().get_mut(&block_root) {
+            let mut write_lock = {
+                let _timer = metrics::start_timer(
+                    &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES,
+                );
+                self.critical.write()
+            };
+            if let Some(components) = write_lock.get_mut(&block_root) {
                 // Clean up span now that block is available
                 components.span = Span::none();
             }
@@ -619,7 +644,12 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
     where
         F: FnOnce(&mut PendingComponents<T::EthSpec>) -> Result<(), AvailabilityCheckError>,
     {
-        let mut write_lock = self.critical.write();
+        let mut write_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES,
+            );
+            self.critical.write()
+        };
 
         {
             let pending_components = write_lock.get_or_insert_mut(block_root, || {
@@ -649,7 +679,12 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         &self,
         block_root: &Hash256,
     ) -> ReconstructColumnsDecision<T::EthSpec> {
-        let mut write_lock = self.critical.write();
+        let mut write_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES,
+            );
+            self.critical.write()
+        };
         let Some(pending_components) = write_lock.get_mut(block_root) else {
             // Block may have been imported as it does not exist in availability cache.
             return ReconstructColumnsDecision::No("block already imported");
@@ -687,7 +722,13 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
     /// In this case, we remove all data columns in `PendingComponents`, reset reconstruction
     /// status so that we can attempt to retrieve columns from peers again.
     pub fn handle_reconstruction_failure(&self, block_root: &Hash256) {
-        if let Some(pending_components_mut) = self.critical.write().get_mut(block_root) {
+        let mut write_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES,
+            );
+            self.critical.write()
+        };
+        if let Some(pending_components_mut) = write_lock.get_mut(block_root) {
             pending_components_mut.verified_data_columns = vec![];
             pending_components_mut.reconstruction_started = false;
         }
@@ -727,7 +768,13 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
     pub fn remove_pre_execution_block(&self, block_root: &Hash256) {
         // The read lock is immediately dropped so we can safely remove the block from the cache.
         if let Some(BlockProcessStatus::NotValidated(_, _)) = self.get_cached_block(block_root) {
-            self.critical.write().pop(block_root);
+            let mut write_lock = {
+                let _timer = metrics::start_timer(
+                    &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES,
+                );
+                self.critical.write()
+            };
+            write_lock.pop(block_root);
         }
     }
 
@@ -785,7 +832,12 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         self.state_cache.do_maintenance(cutoff_epoch);
 
         // Collect keys of pending blocks from a previous epoch to cutoff
-        let mut write_lock = self.critical.write();
+        let mut write_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES,
+            );
+            self.critical.write()
+        };
         let mut keys_to_remove = vec![];
         for (key, value) in write_lock.iter() {
             if let Some(epoch) = value.epoch()
@@ -810,12 +862,23 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
 
     /// Number of states stored in memory in the cache.
     pub fn state_cache_size(&self) -> usize {
-        self.state_cache.lru_cache().read().len()
+        let read_lock = {
+            let _timer =
+                metrics::start_timer(&metrics::DATA_AVAILABILITY_STATE_CACHE_READ_LOCK_WAIT_TIMES);
+            self.state_cache.lru_cache().read()
+        };
+        read_lock.len()
     }
 
     /// Number of pending component entries in memory in the cache.
     pub fn block_cache_size(&self) -> usize {
-        self.critical.read().len()
+        let read_lock = {
+            let _timer = metrics::start_timer(
+                &metrics::DATA_AVAILABILITY_PENDING_COMPONENTS_READ_LOCK_WAIT_TIMES,
+            );
+            self.critical.read()
+        };
+        read_lock.len()
     }
 }
 

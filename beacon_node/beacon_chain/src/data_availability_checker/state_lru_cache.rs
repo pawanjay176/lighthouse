@@ -1,4 +1,5 @@
 use crate::block_verification_types::AsBlock;
+use crate::metrics;
 use crate::{
     AvailabilityPendingExecutedBlock, BeaconChainTypes, BeaconStore, PayloadVerificationOutcome,
     block_verification_types::BlockImportData,
@@ -80,7 +81,15 @@ impl<T: BeaconChainTypes> StateLRUCache<T> {
     ) -> DietAvailabilityPendingExecutedBlock<T::EthSpec> {
         let state = executed_block.import_data.state;
         let state_root = executed_block.block.state_root();
-        self.states.write().put(state_root, state);
+        {
+            let mut write_lock = {
+                let _timer = metrics::start_timer(
+                    &metrics::DATA_AVAILABILITY_STATE_CACHE_WRITE_LOCK_WAIT_TIMES,
+                );
+                self.states.write()
+            };
+            write_lock.put(state_root, state);
+        }
 
         DietAvailabilityPendingExecutedBlock {
             block: executed_block.block,
@@ -104,10 +113,19 @@ impl<T: BeaconChainTypes> StateLRUCache<T> {
         _span: &Span,
     ) -> Result<AvailabilityPendingExecutedBlock<T::EthSpec>, AvailabilityCheckError> {
         // Keep the state in the cache to prevent reconstruction in race conditions
-        let state = if let Some(state) = self.states.write().get(&diet_executed_block.state_root) {
-            state.clone()
-        } else {
-            self.reconstruct_state(&diet_executed_block)?
+        let state = {
+            let mut write_lock = {
+                let _timer = metrics::start_timer(
+                    &metrics::DATA_AVAILABILITY_STATE_CACHE_WRITE_LOCK_WAIT_TIMES,
+                );
+                self.states.write()
+            };
+            if let Some(state) = write_lock.get(&diet_executed_block.state_root) {
+                state.clone()
+            } else {
+                drop(write_lock);
+                self.reconstruct_state(&diet_executed_block)?
+            }
         };
         let block_root = diet_executed_block.block.canonical_root();
         Ok(AvailabilityPendingExecutedBlock {
@@ -183,7 +201,11 @@ impl<T: BeaconChainTypes> StateLRUCache<T> {
 
     /// remove any states from the cache from before the given epoch
     pub fn do_maintenance(&self, cutoff_epoch: Epoch) {
-        let mut write_lock = self.states.write();
+        let mut write_lock = {
+            let _timer =
+                metrics::start_timer(&metrics::DATA_AVAILABILITY_STATE_CACHE_WRITE_LOCK_WAIT_TIMES);
+            self.states.write()
+        };
         while let Some((_, state)) = write_lock.peek_lru() {
             if state.slot().epoch(T::EthSpec::slots_per_epoch()) < cutoff_epoch {
                 write_lock.pop_lru();

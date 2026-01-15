@@ -1916,6 +1916,38 @@ pub static KZG_DATA_COLUMN_RECONSTRUCTION_INCOMPLETE_TOTAL: LazyLock<Result<IntC
         )
     });
 
+pub static DATA_AVAILABILITY_PENDING_COMPONENTS_READ_LOCK_WAIT_TIMES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram(
+            "data_availability_pending_components_read_lock_wait_seconds",
+            "Time spent waiting for the pending components cache read lock",
+        )
+    });
+
+pub static DATA_AVAILABILITY_PENDING_COMPONENTS_WRITE_LOCK_WAIT_TIMES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram(
+            "data_availability_pending_components_write_lock_wait_seconds",
+            "Time spent waiting for the pending components cache write lock",
+        )
+    });
+
+pub static DATA_AVAILABILITY_STATE_CACHE_READ_LOCK_WAIT_TIMES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram(
+            "data_availability_state_cache_read_lock_wait_seconds",
+            "Time spent waiting for the state LRU cache read lock",
+        )
+    });
+
+pub static DATA_AVAILABILITY_STATE_CACHE_WRITE_LOCK_WAIT_TIMES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram(
+            "data_availability_state_cache_write_lock_wait_seconds",
+            "Time spent waiting for the state LRU cache write lock",
+        )
+    });
+
 /*
  * light_client server metrics
  */
