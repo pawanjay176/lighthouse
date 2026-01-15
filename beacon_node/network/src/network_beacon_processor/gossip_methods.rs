@@ -7,6 +7,7 @@ use crate::{
 use beacon_chain::blob_verification::{GossipBlobError, GossipVerifiedBlob};
 use beacon_chain::block_verification_types::AsBlock;
 use beacon_chain::data_column_verification::{GossipDataColumnError, GossipVerifiedDataColumn};
+use beacon_chain::fetch_blobs::FetchBlobsContext;
 use beacon_chain::store::Error;
 use beacon_chain::{
     AvailabilityProcessingStatus, BeaconChainError, BeaconChainTypes, BlockError, ForkChoiceError,
@@ -655,6 +656,23 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     metrics::observe_duration(
                         &metrics::BEACON_DATA_COLUMN_GOSSIP_PROPAGATION_VERIFICATION_DELAY_TIME,
                         duration,
+                    );
+                }
+
+                // Data column is gossip valid. Attempt to fetch blobs from the EL to produce
+                // remaining custody columns, without waiting for all columns from peers.
+                if let Some(context) = FetchBlobsContext::from_data_column(&column_sidecar) {
+                    let publish_blobs = true;
+                    let self_clone = self.clone();
+                    let current_span = Span::current();
+                    self.executor.spawn(
+                        async move {
+                            self_clone
+                                .fetch_engine_blobs_and_publish(context, publish_blobs)
+                                .await
+                        }
+                        .instrument(current_span),
+                        "fetch_blobs_gossip_column",
                     );
                 }
 
@@ -1484,19 +1502,20 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
 
         // Block is gossip valid. Attempt to fetch blobs from the EL using versioned hashes derived
         // from kzg commitments, without having to wait for all blobs to be sent from the peers.
-        let publish_blobs = true;
-        let self_clone = self.clone();
-        let block_clone = block.clone();
-        let current_span = Span::current();
-        self.executor.spawn(
-            async move {
-                self_clone
-                    .fetch_engine_blobs_and_publish(block_clone, block_root, publish_blobs)
-                    .await
-            }
-            .instrument(current_span),
-            "fetch_blobs_gossip",
-        );
+        if let Some(context) = FetchBlobsContext::from_block(&block, block_root) {
+            let publish_blobs = true;
+            let self_clone = self.clone();
+            let current_span = Span::current();
+            self.executor.spawn(
+                async move {
+                    self_clone
+                        .fetch_engine_blobs_and_publish(context, publish_blobs)
+                        .await
+                }
+                .instrument(current_span),
+                "fetch_blobs_gossip",
+            );
+        }
 
         let result = self
             .chain

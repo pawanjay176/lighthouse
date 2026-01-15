@@ -5,7 +5,7 @@ use beacon_chain::block_verification_types::RpcBlock;
 use beacon_chain::data_column_verification::{GossipDataColumnError, observe_gossip_data_column};
 use beacon_chain::fetch_blobs::{
     EngineGetBlobsOutput, FetchBlobsContext, FetchEngineBlobError,
-    fetch_and_process_engine_blobs_v1, fetch_and_process_engine_blobs_v2,
+    fetch_and_process_engine_blobs_v2,
 };
 use beacon_chain::{AvailabilityProcessingStatus, BeaconChain, BeaconChainTypes, BlockError};
 use beacon_processor::{
@@ -22,6 +22,7 @@ use lighthouse_network::{
     Client, MessageId, NetworkGlobals, PeerId, PubsubMessage,
     rpc::{BlocksByRangeRequest, BlocksByRootRequest, LightClientBootstrapRequest, StatusMessage},
 };
+use parking_lot::RwLock;
 use rand::prelude::SliceRandom;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,6 +63,9 @@ pub struct NetworkBeaconProcessor<T: BeaconChainTypes> {
     pub network_globals: Arc<NetworkGlobals<T::EthSpec>>,
     pub invalid_block_storage: InvalidBlockStorage,
     pub executor: TaskExecutor,
+    /// Track the last block_root for which fetch_blobs was initiated to avoid duplicate work.
+    /// Only one valid non-slashable block can exist per slot, so we only need to track the last one.
+    pub last_fetch_blobs_block_root: RwLock<Option<Hash256>>,
 }
 
 // Publish blobs in batches of exponentially increasing size.
@@ -753,63 +757,60 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         });
     }
 
+    /// Returns `true` if fetch_blobs should be initiated for this block_root.
+    /// Returns `false` if it was already initiated (duplicate).
+    fn should_initiate_fetch_blobs(&self, block_root: &Hash256) -> bool {
+        let mut last = self.last_fetch_blobs_block_root.write();
+        if *last == Some(*block_root) {
+            false
+        } else {
+            *last = Some(*block_root);
+            true
+        }
+    }
+
+    /// Fetches blobs from the EL using v2 API (PeerDAS) and publishes custody columns.
+    /// Can be triggered from either a gossip verified block or data column.
+    ///
+    /// This function includes deduplication - it will only initiate one fetch per block_root.
     pub async fn fetch_engine_blobs_and_publish(
         self: &Arc<Self>,
-        block: Arc<SignedBeaconBlock<T::EthSpec, FullPayload<T::EthSpec>>>,
-        block_root: Hash256,
+        context: FetchBlobsContext<T::EthSpec>,
         publish_blobs: bool,
     ) {
         if self.chain.config.disable_get_blobs {
             return;
         }
-        let epoch = block.slot().epoch(T::EthSpec::slots_per_epoch());
+
+        let block_root = context.block_root;
+
+        // Avoid duplicate fetch_blobs calls for the same block
+        if !self.should_initiate_fetch_blobs(&block_root) {
+            debug!(%block_root, "Fetch blobs already initiated for block, skipping");
+            return;
+        }
+
+        let epoch = context.slot().epoch(T::EthSpec::slots_per_epoch());
         let custody_columns = self.chain.sampling_columns_for_epoch(epoch);
         let self_cloned = self.clone();
         let publish_fn = move |blobs_or_data_column| {
             if publish_blobs {
-                match blobs_or_data_column {
-                    EngineGetBlobsOutput::Blobs(blobs) => {
-                        self_cloned.publish_blobs_gradually(
-                            blobs.into_iter().map(|b| b.to_blob()).collect(),
-                            block_root,
-                        );
-                    }
-                    EngineGetBlobsOutput::CustodyColumns(columns) => {
-                        self_cloned.publish_data_columns_gradually(
-                            columns.into_iter().map(|c| c.clone_arc()).collect(),
-                            block_root,
-                        );
-                    }
-                };
+                if let EngineGetBlobsOutput::CustodyColumns(columns) = blobs_or_data_column {
+                    self_cloned.publish_data_columns_gradually(
+                        columns.into_iter().map(|c| c.clone_arc()).collect(),
+                        block_root,
+                    );
+                }
             }
         };
 
-        let result = if self.chain.spec.is_peer_das_enabled_for_epoch(epoch) {
-            // Use v2 API for PeerDAS
-            let Some(context) = FetchBlobsContext::from_block(&block, block_root) else {
-                debug!(
-                    %block_root,
-                    "Fetch blobs not triggered - no blobs in block or pre-Deneb"
-                );
-                return;
-            };
-            fetch_and_process_engine_blobs_v2(
-                self.chain.clone(),
-                context,
-                custody_columns,
-                publish_fn,
-            )
-            .await
-        } else {
-            // Use v1 API for pre-PeerDAS
-            fetch_and_process_engine_blobs_v1(
-                self.chain.clone(),
-                block_root,
-                block.clone(),
-                publish_fn,
-            )
-            .await
-        };
+        let result = fetch_and_process_engine_blobs_v2(
+            self.chain.clone(),
+            context,
+            custody_columns,
+            publish_fn,
+        )
+        .await;
 
         match result {
             Ok(Some(availability)) => match availability {
@@ -824,7 +825,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 AvailabilityProcessingStatus::MissingComponents(_, _) => {
                     debug!(
                         %block_root,
-                        "Still missing blobs after engine blobs processed successfully"
+                        "Still missing components after engine blobs processed"
                     );
                 }
             },

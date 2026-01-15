@@ -272,6 +272,7 @@ impl TestRig {
             network_globals: network_globals.clone(),
             invalid_block_storage: InvalidBlockStorage::Disabled,
             executor: executor.clone(),
+            last_fetch_blobs_block_root: <_>::default(),
         };
         let network_beacon_processor = Arc::new(network_beacon_processor);
 

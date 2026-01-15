@@ -103,6 +103,7 @@ impl<T: BeaconChainTypes> Router<T> {
             network_globals: network_globals.clone(),
             invalid_block_storage,
             executor: executor.clone(),
+            last_fetch_blobs_block_root: <_>::default(),
         };
         let network_beacon_processor = Arc::new(network_beacon_processor);
 

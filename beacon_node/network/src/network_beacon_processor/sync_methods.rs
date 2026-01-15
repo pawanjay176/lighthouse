@@ -9,6 +9,7 @@ use crate::sync::{
 use beacon_chain::block_verification_types::{AsBlock, RpcBlock};
 use beacon_chain::data_availability_checker::AvailabilityCheckError;
 use beacon_chain::data_availability_checker::MaybeAvailableBlock;
+use beacon_chain::fetch_blobs::FetchBlobsContext;
 use beacon_chain::historical_data_columns::HistoricalDataColumnError;
 use beacon_chain::{
     AvailabilityProcessingStatus, BeaconChainTypes, BlockError, ChainSegmentResult,
@@ -223,9 +224,13 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 // Block is valid, we can now attempt fetching blobs from EL using version hashes
                 // derived from kzg commitments from the block, without having to wait for all blobs
                 // to be sent from the peers if we already have them.
-                let publish_blobs = false;
-                self.fetch_engine_blobs_and_publish(signed_beacon_block, block_root, publish_blobs)
-                    .await
+                if let Some(context) =
+                    FetchBlobsContext::from_block(&signed_beacon_block, block_root)
+                {
+                    let publish_blobs = false;
+                    self.fetch_engine_blobs_and_publish(context, publish_blobs)
+                        .await;
+                }
             }
             _ => {}
         }
