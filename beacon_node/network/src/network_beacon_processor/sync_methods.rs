@@ -228,7 +228,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     FetchBlobsContext::from_block(&signed_beacon_block, block_root)
                 {
                     let publish_blobs = false;
-                    self.fetch_engine_blobs_and_publish(context, publish_blobs)
+                    self.fetch_engine_blobs_and_publish(context, publish_blobs, "rpc")
                         .await;
                 }
             }

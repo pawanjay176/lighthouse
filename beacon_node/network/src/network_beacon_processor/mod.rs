@@ -777,6 +777,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         self: &Arc<Self>,
         context: FetchBlobsContext<T::EthSpec>,
         publish_blobs: bool,
+        trigger: &str,
     ) {
         if self.chain.config.disable_get_blobs {
             return;
@@ -789,6 +790,9 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             debug!(%block_root, "Fetch blobs already initiated for block, skipping");
             return;
         }
+
+        // Record metric for non-duplicate calls
+        metrics::inc_counter_vec(&crate::metrics::BEACON_BLOBS_FROM_EL_TRIGGER, &[trigger]);
 
         let epoch = context.slot().epoch(T::EthSpec::slots_per_epoch());
         let custody_columns = self.chain.sampling_columns_for_epoch(epoch);

@@ -143,6 +143,14 @@ pub static BEACON_PROCESSOR_GOSSIP_DATA_COLUMN_SIDECAR_VERIFIED_TOTAL: LazyLock<
         "Total number of gossip data column sidecar verified for propagation.",
     )
 });
+// Fetch blobs from EL trigger source.
+pub static BEACON_BLOBS_FROM_EL_TRIGGER: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
+    try_create_int_counter_vec(
+        "beacon_blobs_from_el_trigger_total",
+        "Count of fetch_blobs calls by trigger source",
+        &["trigger"],
+    )
+});
 // Gossip Exits.
 pub static BEACON_PROCESSOR_EXIT_VERIFIED_TOTAL: LazyLock<Result<IntCounter>> =
     LazyLock::new(|| {

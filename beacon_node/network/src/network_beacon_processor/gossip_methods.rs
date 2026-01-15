@@ -668,7 +668,11 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     self.executor.spawn(
                         async move {
                             self_clone
-                                .fetch_engine_blobs_and_publish(context, publish_blobs)
+                                .fetch_engine_blobs_and_publish(
+                                    context,
+                                    publish_blobs,
+                                    "gossip_data_column",
+                                )
                                 .await
                         }
                         .instrument(current_span),
@@ -1509,7 +1513,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             self.executor.spawn(
                 async move {
                     self_clone
-                        .fetch_engine_blobs_and_publish(context, publish_blobs)
+                        .fetch_engine_blobs_and_publish(context, publish_blobs, "gossip_block")
                         .await
                 }
                 .instrument(current_span),
