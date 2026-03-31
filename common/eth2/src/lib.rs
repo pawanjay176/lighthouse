@@ -1364,6 +1364,27 @@ impl BeaconNodeHttpClient {
             .map(|opt| opt.map(BeaconResponse::ForkVersioned))
     }
 
+    /// GET v1/beacon/execution_payload_envelope/{block_id}
+    ///
+    /// ///
+    /// Returns `Ok(None)` on a 404 error.
+    pub async fn get_execution_payload_envelope<E: EthSpec>(
+        &self,
+        block_id: BlockId,
+    ) -> Result<Option<ExecutionOptimisticFinalizedBeaconResponse<SignedExecutionPayloadEnvelope<E>>>, Error>
+    {
+        let mut path = self.eth_path(V1)?;
+        path.path_segments_mut()
+            .map_err(|()| Error::InvalidUrl(self.server.clone()))?
+            .push("beacon")
+            .push("execution_payload_envelope")
+            .push(&block_id.to_string());
+
+        self.get_opt(path)
+            .await
+            .map(|opt| opt.map(BeaconResponse::ForkVersioned))
+    }
+
     /// `GET v1/beacon/blob_sidecars/{block_id}`
     ///
     /// Returns `Ok(None)` on a 404 error.
