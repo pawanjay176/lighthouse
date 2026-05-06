@@ -67,6 +67,7 @@ use crate::payload_attestation_verification::VerifiedPayloadAttestationMessage;
 use crate::payload_bid_verification::payload_bid_cache::GossipVerifiedPayloadBidCache;
 #[cfg(not(test))]
 use crate::payload_envelope_streamer::{EnvelopeRequestSource, launch_payload_envelope_stream};
+use crate::payload_envelope_verification::EnvelopeError;
 use crate::pending_payload_cache::PendingPayloadCache;
 use crate::pending_payload_cache::{
     Availability as PayloadAvailability,
@@ -3440,8 +3441,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         &merge_result.full_columns,
                     )
                     .map_err(BlockError::from)?;
-                self.process_payload_envelope_availability(slot, availability, || Ok(()))
-                    .await?
+                self.process_payload_envelope_availability(slot, availability)
+                    .await
+                    .map_err(|e| BlockError::InternalError(format!("{e:?}")))?
             } else {
                 let availability = self
                     .data_availability_checker
@@ -3671,8 +3673,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     };
 
                     Ok(self
-                        .process_payload_envelope_availability(slot, availability, || Ok(()))
+                        .process_payload_envelope_availability(slot, availability)
                         .await
+                        .map_err(|e| BlockError::InternalError(format!("{e:?}")))
                         .map(|status| Some((status, data_columns_to_publish)))?)
                 }
                 DataColumnReconstructionResultGloas::NotStarted(reason)
@@ -4011,9 +4014,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             let availability = self
                 .pending_payload_cache
                 .put_gossip_verified_data_columns(block_root, bid, data_columns)?;
+            if matches!(availability, PayloadAvailability::Available(_)) {
+                publish_fn()?;
+            }
             Ok(self
-                .process_payload_envelope_availability(slot, availability, publish_fn)
-                .await?)
+                .process_payload_envelope_availability(slot, availability)
+                .await
+                .map_err(|e| BlockError::InternalError(format!("{e:?}")))?)
         } else {
             let availability = self
                 .data_availability_checker
@@ -4119,8 +4126,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         .put_kzg_verified_custody_data_columns(block_root, bid, &data_columns)
                         .map_err(BlockError::from)?;
                     Ok(self
-                        .process_payload_envelope_availability(slot, availability, || Ok(()))
-                        .await?)
+                        .process_payload_envelope_availability(slot, availability)
+                        .await
+                        .map_err(|e| BlockError::InternalError(format!("{e:?}")))?)
                 } else {
                     let availability = self
                         .data_availability_checker
@@ -4163,8 +4171,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 .put_rpc_custody_columns(block_root, bid, custody_columns)
                 .map_err(BlockError::from)?;
             Ok(self
-                .process_payload_envelope_availability(slot, availability, || Ok(()))
-                .await?)
+                .process_payload_envelope_availability(slot, availability)
+                .await
+                .map_err(|e| BlockError::InternalError(format!("{e:?}")))?)
         } else {
             let availability = self
                 .data_availability_checker
@@ -4234,11 +4243,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         self: &Arc<Self>,
         slot: Slot,
         availability: PayloadAvailability<T::EthSpec>,
-        publish_fn: impl FnOnce() -> Result<(), BlockError>,
-    ) -> Result<AvailabilityProcessingStatus, BlockError> {
+    ) -> Result<AvailabilityProcessingStatus, EnvelopeError> {
         match availability {
             PayloadAvailability::Available(available_envelope) => {
-                publish_fn()?;
                 self.import_available_execution_payload_envelope(available_envelope)
                     .await
             }
