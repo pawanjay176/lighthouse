@@ -4,12 +4,13 @@ use crate::payload_envelope_verification::AvailabilityPendingExecutedEnvelope;
 use crate::payload_envelope_verification::AvailableEnvelope;
 use crate::payload_envelope_verification::AvailableExecutedEnvelope;
 use crate::pending_payload_cache::pending_column::PendingColumn;
+use crate::CustodyContext;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{Span, debug, debug_span};
 use types::DataColumnSidecar;
-use types::{ColumnIndex, EthSpec, Hash256, SignedExecutionPayloadBid};
+use types::{ChainSpec, ColumnIndex, EthSpec, Hash256, SignedExecutionPayloadBid};
 
 /// This represents the components of a payload pending data availability.
 ///
@@ -95,9 +96,17 @@ impl<E: EthSpec> PendingComponents<E> {
     }
 
     /// Returns `Some` if the envelope and all required data columns have been received.
+    ///
+    /// `da_check_required` is the data availability boundary decision for the bid's epoch (see
+    /// `PendingPayloadCache::da_check_required_for_epoch`). When DA is not required (the bid's
+    /// epoch is beyond the boundary) the envelope is available as soon as it is received, without
+    /// waiting for any data columns.
     pub fn make_available(
         &self,
         num_expected_columns: usize,
+        da_check_required: bool,
+        custody_context: &CustodyContext<E>,
+        spec: &ChainSpec,
     ) -> Result<Option<AvailableExecutedEnvelope<E>>, AvailabilityCheckError> {
         // Check if the payload has been received and executed
         let Some(envelope) = &self.envelope else {
@@ -110,9 +119,9 @@ impl<E: EthSpec> PendingComponents<E> {
             payload_verification_outcome,
         } = envelope;
 
-        let columns = if self.num_blobs_expected() == 0 {
+        let columns = if self.num_blobs_expected() == 0 || !da_check_required {
             self.span.in_scope(|| {
-                debug!("Bid has no blobs, data is available");
+                debug!("Bid has no blobs or data is beyond the DA boundary, data is available");
             });
             vec![]
         } else {
@@ -137,7 +146,14 @@ impl<E: EthSpec> PendingComponents<E> {
             }
         };
 
-        let available_envelope = AvailableEnvelope::new(envelope.clone(), columns);
+        let available_envelope = AvailableEnvelope::new(
+            envelope.clone(),
+            columns,
+            &self.bid,
+            da_check_required,
+            custody_context,
+            spec,
+        )?;
 
         Ok(Some(AvailableExecutedEnvelope {
             envelope: available_envelope,

@@ -675,7 +675,7 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes>(
 
     for (available_block, maybe_envelope) in available_blocks.iter().zip(envelopes.iter()) {
         if let Some(envelope) = maybe_envelope {
-            verify_columns_against_block(&chain.kzg, available_block.block(), &envelope.columns)?;
+            verify_columns_against_block(&chain.kzg, available_block.block(), &envelope.columns())?;
         }
     }
 

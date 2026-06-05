@@ -499,8 +499,35 @@ impl<E: EthSpec> RangeBlockComponentsRequest<E> {
                 envelopes_by_block_root.as_mut()
             {
                 let envelope = envelopes_by_block_root.remove(&block_root);
-                let available_envelope =
-                    envelope.map(|env| Box::new(AvailableEnvelope::new(env, custody_columns)));
+                let available_envelope = match envelope {
+                    Some(env) => {
+                        let bid = block
+                            .message()
+                            .body()
+                            .signed_execution_payload_bid()
+                            .map_err(|e| {
+                                CouplingError::InternalError(format!(
+                                    "Gloas block missing signed_execution_payload_bid: {e:?}"
+                                ))
+                            })?;
+                        // TODO(gloas): if we remove `DataAvailabilityChecker` post gloas, plumb the
+                        // `PendingPayloadCache` through here instead and source both the DA
+                        // boundary decision and the custody context from it.
+                        let da_check_required =
+                            da_checker.da_check_required_for_epoch(block.epoch());
+                        let available_envelope = AvailableEnvelope::new(
+                            env,
+                            custody_columns,
+                            bid,
+                            da_check_required,
+                            da_checker.custody_context(),
+                            &spec,
+                        )
+                        .map_err(|e| CouplingError::InternalError(format!("{:?}", e)))?;
+                        Some(Box::new(available_envelope))
+                    }
+                    None => None,
+                };
 
                 RangeSyncBlock::new_gloas(block, available_envelope)
                     .map_err(CouplingError::EnvelopePeerFailure)?
@@ -1076,7 +1103,7 @@ mod tests {
                         envelope.envelope().beacon_block_root(),
                         block.canonical_root()
                     );
-                    assert_eq!(envelope.columns.len(), expected_custody_columns.len());
+                    assert_eq!(envelope.columns().len(), expected_custody_columns.len());
                 }
                 other => panic!("expected Gloas block with envelope, got {other:?}"),
             }

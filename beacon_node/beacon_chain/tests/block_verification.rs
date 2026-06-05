@@ -176,8 +176,27 @@ where
                 .collect::<Vec<_>>(),
             Some(DataSidecars::Blobs(_)) | None => vec![],
         };
-        let envelope =
-            execution_envelope.map(|envelope| Box::new(AvailableEnvelope::new(envelope, columns)));
+        let envelope = execution_envelope.map(|envelope| {
+            let bid = block
+                .message()
+                .body()
+                .signed_execution_payload_bid()
+                .expect("gloas block should have a bid");
+            let da_check_required = chain
+                .data_availability_checker
+                .da_check_required_for_epoch(block.epoch());
+            Box::new(
+                AvailableEnvelope::new(
+                    envelope,
+                    columns,
+                    bid,
+                    da_check_required,
+                    chain.data_availability_checker.custody_context().as_ref(),
+                    &chain.spec,
+                )
+                .unwrap(),
+            )
+        });
         return RangeSyncBlock::new_gloas(block, envelope).unwrap();
     }
 
@@ -2268,8 +2287,11 @@ async fn import_execution_pending_block<T: BeaconChainTypes>(
     }
 }
 
-async fn make_gloas_range_sync_block_inputs()
--> Option<(Arc<SignedBeaconBlock<E>>, SignedExecutionPayloadEnvelope<E>)> {
+async fn make_gloas_range_sync_block_inputs() -> Option<(
+    BeaconChainHarness<EphemeralHarnessType<E>>,
+    Arc<SignedBeaconBlock<E>>,
+    SignedExecutionPayloadEnvelope<E>,
+)> {
     let spec = test_spec::<E>();
     if !spec.fork_name_at_slot::<E>(Slot::new(1)).gloas_enabled() {
         return None;
@@ -2288,16 +2310,52 @@ async fn make_gloas_range_sync_block_inputs()
     let state = harness.get_current_state();
     let slot = harness.get_current_slot();
     let ((block, _), envelope, _) = harness.make_block_with_envelope(state, slot).await;
-    Some((block, envelope.expect("gloas block should have envelope")))
+    Some((
+        harness,
+        block,
+        envelope.expect("gloas block should have envelope"),
+    ))
+}
+
+/// Builds an `AvailableEnvelope` for the given block/envelope in tests. The bid (commitment
+/// source) is read from the block, and the harness supplies custody context and spec.
+fn build_available_envelope(
+    harness: &BeaconChainHarness<EphemeralHarnessType<E>>,
+    block: &SignedBeaconBlock<E>,
+    envelope: SignedExecutionPayloadEnvelope<E>,
+) -> Box<AvailableEnvelope<E>> {
+    let bid = block
+        .message()
+        .body()
+        .signed_execution_payload_bid()
+        .expect("gloas block should have a bid");
+    let da_check_required = harness
+        .chain
+        .data_availability_checker
+        .da_check_required_for_epoch(block.epoch());
+    let available_envelope = AvailableEnvelope::new(
+        Arc::new(envelope),
+        vec![],
+        bid,
+        da_check_required,
+        harness
+            .chain
+            .data_availability_checker
+            .custody_context()
+            .as_ref(),
+        &harness.spec,
+    )
+    .expect("envelope should be available");
+    Box::new(available_envelope)
 }
 
 #[tokio::test]
 async fn range_sync_block_new_gloas_accepts_matching_envelope() {
-    let Some((block, envelope)) = make_gloas_range_sync_block_inputs().await else {
+    let Some((harness, block, envelope)) = make_gloas_range_sync_block_inputs().await else {
         return;
     };
 
-    let available_envelope = Box::new(AvailableEnvelope::new(Arc::new(envelope), vec![]));
+    let available_envelope = build_available_envelope(&harness, &block, envelope);
     let result = RangeSyncBlock::new_gloas(block, Some(available_envelope));
 
     assert!(
@@ -2309,7 +2367,7 @@ async fn range_sync_block_new_gloas_accepts_matching_envelope() {
 
 #[tokio::test]
 async fn range_sync_block_new_gloas_allows_missing_envelope() {
-    let Some((block, _)) = make_gloas_range_sync_block_inputs().await else {
+    let Some((_harness, block, _)) = make_gloas_range_sync_block_inputs().await else {
         return;
     };
 
@@ -2324,12 +2382,12 @@ async fn range_sync_block_new_gloas_allows_missing_envelope() {
 
 #[tokio::test]
 async fn range_sync_block_new_gloas_rejects_mismatched_block_root() {
-    let Some((block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
+    let Some((harness, block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
         return;
     };
 
     envelope.message.beacon_block_root = Hash256::repeat_byte(0x11);
-    let available_envelope = Box::new(AvailableEnvelope::new(Arc::new(envelope), vec![]));
+    let available_envelope = build_available_envelope(&harness, &block, envelope);
     let result = RangeSyncBlock::new_gloas(block, Some(available_envelope));
 
     assert!(
@@ -2341,12 +2399,12 @@ async fn range_sync_block_new_gloas_rejects_mismatched_block_root() {
 
 #[tokio::test]
 async fn range_sync_block_new_gloas_rejects_slot_mismatch() {
-    let Some((block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
+    let Some((harness, block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
         return;
     };
 
     envelope.message.payload.slot_number += 1;
-    let available_envelope = Box::new(AvailableEnvelope::new(Arc::new(envelope), vec![]));
+    let available_envelope = build_available_envelope(&harness, &block, envelope);
     let result = RangeSyncBlock::new_gloas(block, Some(available_envelope));
 
     assert!(
@@ -2358,12 +2416,12 @@ async fn range_sync_block_new_gloas_rejects_slot_mismatch() {
 
 #[tokio::test]
 async fn range_sync_block_new_gloas_rejects_builder_index_mismatch() {
-    let Some((block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
+    let Some((harness, block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
         return;
     };
 
     envelope.message.builder_index += 1;
-    let available_envelope = Box::new(AvailableEnvelope::new(Arc::new(envelope), vec![]));
+    let available_envelope = build_available_envelope(&harness, &block, envelope);
     let result = RangeSyncBlock::new_gloas(block, Some(available_envelope));
 
     assert!(
@@ -2375,12 +2433,12 @@ async fn range_sync_block_new_gloas_rejects_builder_index_mismatch() {
 
 #[tokio::test]
 async fn range_sync_block_new_gloas_rejects_block_hash_mismatch() {
-    let Some((block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
+    let Some((harness, block, mut envelope)) = make_gloas_range_sync_block_inputs().await else {
         return;
     };
 
     envelope.message.payload.block_hash = ExecutionBlockHash::repeat_byte(0x22);
-    let available_envelope = Box::new(AvailableEnvelope::new(Arc::new(envelope), vec![]));
+    let available_envelope = build_available_envelope(&harness, &block, envelope);
     let result = RangeSyncBlock::new_gloas(block, Some(available_envelope));
 
     assert!(

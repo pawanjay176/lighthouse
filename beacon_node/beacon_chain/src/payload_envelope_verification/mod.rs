@@ -19,18 +19,21 @@
 //! ```
 
 use state_processing::envelope_processing::EnvelopeProcessingError;
+use std::collections::HashSet;
 use std::sync::Arc;
 use store::Error as DBError;
 use strum::AsRefStr;
 use tracing::instrument;
 use types::{
-    BeaconState, BeaconStateError, DataColumnSidecarList, EthSpec, ExecutionBlockHash,
-    ExecutionPayloadEnvelope, Hash256, SignedExecutionPayloadEnvelope, Slot,
+    BeaconState, BeaconStateError, ChainSpec, DataColumnSidecarList, EthSpec, ExecutionBlockHash,
+    ExecutionPayloadEnvelope, Hash256, SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
+    Slot,
 };
 
+use crate::data_availability_checker::AvailabilityCheckError;
 use crate::{
-    BeaconChainError, BeaconChainTypes, BeaconStore, BlockError, ExecutionPayloadError,
-    PayloadVerificationError, PayloadVerificationOutcome,
+    BeaconChainError, BeaconChainTypes, BeaconStore, BlockError, CustodyContext,
+    ExecutionPayloadError, PayloadVerificationError, PayloadVerificationOutcome,
 };
 
 pub mod execution_pending_envelope;
@@ -40,18 +43,91 @@ mod payload_notifier;
 
 pub use execution_pending_envelope::ExecutionPendingEnvelope;
 
+/// The data column data accompanying a Gloas payload envelope, mirroring `AvailableBlockData`.
+///
+/// In Gloas, data availability is checked on the payload envelope rather than the block, and
+/// the KZG commitments live in the block's `signed_execution_payload_bid`.
+#[derive(Debug, Clone)]
+pub enum AvailableEnvelopeData<E: EthSpec> {
+    /// The bid has no commitments or columns aren't required for this epoch.
+    NoData,
+    /// The bid commits more than zero blobs, so the full custody column set is required.
+    DataColumns(DataColumnSidecarList<E>),
+}
+
+impl<E: EthSpec> AvailableEnvelopeData<E> {
+    pub fn columns(&self) -> DataColumnSidecarList<E> {
+        match self {
+            AvailableEnvelopeData::NoData => vec![],
+            AvailableEnvelopeData::DataColumns(columns) => columns.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AvailableEnvelope<E: EthSpec> {
     envelope: Arc<SignedExecutionPayloadEnvelope<E>>,
-    pub columns: DataColumnSidecarList<E>,
+    column_data: AvailableEnvelopeData<E>,
 }
 
 impl<E: EthSpec> AvailableEnvelope<E> {
+    /// Constructs an `AvailableEnvelope` from an envelope and its data columns.
+    ///
+    /// This mirrors `AvailableBlock::new`, validating that:
+    /// - Columns are not provided when not required (bid commits zero blobs, or the bid's epoch is
+    ///   beyond the data availability boundary, per `da_check_required`)
+    /// - The full custody column set is present when columns are required
+    ///
+    /// `da_check_required` determines if the data is within the data availability
+    /// boundary.
+    ///
+    /// Returns `AvailabilityCheckError` if:
+    /// - `InvalidAvailableBlockData`: Columns are provided but not required
+    /// - `MissingCustodyColumns`: Columns are required but the custody set is incomplete
+    ///
+    /// Note: This only enforces consistency between bid and data columns commitments.
+    /// It does not perform any kzg verification.
     pub fn new(
         envelope: Arc<SignedExecutionPayloadEnvelope<E>>,
         columns: DataColumnSidecarList<E>,
-    ) -> Self {
-        Self { envelope, columns }
+        bid: &SignedExecutionPayloadBid<E>,
+        da_check_required: bool,
+        custody_context: &CustodyContext<E>,
+        spec: &ChainSpec,
+    ) -> Result<Self, AvailabilityCheckError> {
+        let epoch = bid.message.slot.epoch(E::slots_per_epoch());
+        // Gloas is always post-PeerDAS, so columns are required if the bid commits any blobs and
+        // the epoch is within the data availability boundary.
+        let columns_required = !bid.message.blob_kzg_commitments.is_empty() && da_check_required;
+
+        if !columns_required {
+            if !columns.is_empty() {
+                return Err(AvailabilityCheckError::InvalidAvailableBlockData);
+            } else {
+                return Ok(Self {
+                    envelope,
+                    column_data: AvailableEnvelopeData::NoData,
+                });
+            }
+        }
+
+        let mut column_indices = custody_context
+            .sampling_columns_for_epoch(epoch, spec)
+            .iter()
+            .collect::<HashSet<_>>();
+
+        for column in &columns {
+            column_indices.remove(column.index());
+        }
+
+        if !column_indices.is_empty() {
+            return Err(AvailabilityCheckError::MissingCustodyColumns);
+        }
+
+        Ok(Self {
+            envelope,
+            column_data: AvailableEnvelopeData::DataColumns(columns),
+        })
     }
 
     pub fn envelope(&self) -> &Arc<SignedExecutionPayloadEnvelope<E>> {
@@ -62,6 +138,10 @@ impl<E: EthSpec> AvailableEnvelope<E> {
         &self.envelope.message
     }
 
+    pub fn columns(&self) -> DataColumnSidecarList<E> {
+        self.column_data.columns()
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn deconstruct(
         self,
@@ -70,9 +150,10 @@ impl<E: EthSpec> AvailableEnvelope<E> {
         DataColumnSidecarList<E>,
     ) {
         let AvailableEnvelope {
-            envelope, columns, ..
+            envelope,
+            column_data,
         } = self;
-        (envelope, columns)
+        (envelope, column_data.columns())
     }
 }
 

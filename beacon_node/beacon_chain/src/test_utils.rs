@@ -2922,6 +2922,38 @@ where
         self.chain.recompute_head_at_current_slot().await;
     }
 
+    /// Builds an `AvailableEnvelope` for the given Gloas block, reading the bid (commitment
+    /// source) from the block and supplying custody context and spec from the chain.
+    fn build_available_envelope(
+        &self,
+        block: &SignedBeaconBlock<E>,
+        envelope: Arc<SignedExecutionPayloadEnvelope<E>>,
+        columns: DataColumnSidecarList<E>,
+    ) -> Box<AvailableEnvelope<E>> {
+        let bid = block
+            .message()
+            .body()
+            .signed_execution_payload_bid()
+            .expect("gloas block should have a bid");
+        let da_check_required = self
+            .chain
+            .data_availability_checker
+            .da_check_required_for_epoch(block.epoch());
+        let available_envelope = AvailableEnvelope::new(
+            envelope,
+            columns,
+            bid,
+            da_check_required,
+            self.chain
+                .data_availability_checker
+                .custody_context()
+                .as_ref(),
+            &self.chain.spec,
+        )
+        .expect("envelope should be available");
+        Box::new(available_envelope)
+    }
+
     /// Builds a `RangeSyncBlock` from a `SignedBeaconBlock` and blobs or data columns retrieved from
     /// the database.
     pub fn build_range_sync_block_from_store_blobs(
@@ -2942,7 +2974,7 @@ where
                     .get_payload_envelope(&block_root)
                     .unwrap()
                     .map(Arc::new)
-                    .map(|envelope| Box::new(AvailableEnvelope::new(envelope, vec![])));
+                    .map(|envelope| self.build_available_envelope(&block, envelope, vec![]));
                 RangeSyncBlock::new_gloas(block, envelope).unwrap()
             } else {
                 RangeSyncBlock::new(
@@ -2970,7 +3002,9 @@ where
                     .get_payload_envelope(&block_root)
                     .unwrap()
                     .map(Arc::new)
-                    .map(|envelope| Box::new(AvailableEnvelope::new(envelope, custody_columns)));
+                    .map(|envelope| {
+                        self.build_available_envelope(&block, envelope, custody_columns)
+                    });
                 RangeSyncBlock::new_gloas(block, envelope).unwrap()
             } else {
                 let block_data = AvailableBlockData::new_with_data_columns(custody_columns);
@@ -3015,7 +3049,7 @@ where
                 .get_payload_envelope(&block.canonical_root())
                 .map_err(|e| BlockError::BeaconChainError(Box::new(e)))?
                 .map(Arc::new)
-                .map(|envelope| Box::new(AvailableEnvelope::new(envelope, columns)));
+                .map(|envelope| self.build_available_envelope(&block, envelope, columns));
             return RangeSyncBlock::new_gloas(block, envelope).map_err(BlockError::InternalError);
         }
 

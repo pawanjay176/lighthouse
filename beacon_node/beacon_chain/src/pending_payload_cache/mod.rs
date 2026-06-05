@@ -390,7 +390,18 @@ impl<T: BeaconChainTypes> PendingPayloadCache<T> {
         pending_components: MappedRwLockReadGuard<'_, PendingComponents<T::EthSpec>>,
         num_expected_columns: usize,
     ) -> Result<Availability<T::EthSpec>, AvailabilityCheckError> {
-        if let Some(available_envelope) = pending_components.make_available(num_expected_columns)? {
+        // This cache is only fed by near-head sources (live block import, gossip/RPC/EL columns),
+        // so the bid's epoch is always within the data availability boundary and DA is always
+        // required. This mirrors `overflow_lru_cache::make_available`, which likewise does not
+        // consult the boundary. The range-sync/coupling path, which can construct envelopes for
+        // epochs beyond the boundary, computes this from the `DataAvailabilityChecker` instead.
+        let da_check_required = true;
+        if let Some(available_envelope) = pending_components.make_available(
+            num_expected_columns,
+            da_check_required,
+            &self.custody_context,
+            &self.spec,
+        )? {
             // Explicitly drop read lock before acquiring write lock
             drop(pending_components);
             if let Some(components) = self.availability_cache.write().get_mut(&block_root) {
@@ -657,7 +668,7 @@ mod data_availability_checker_tests {
         assert_missing(s.put_envelope());
         let envelope = assert_available(s.put_columns(s.custody.clone()));
         assert_eq!(envelope.block_root, s.block_root);
-        assert_eq!(envelope.envelope.columns.len(), s.custody.len());
+        assert_eq!(envelope.envelope.columns().len(), s.custody.len());
     }
 
     /// Columns first → MissingComponents. Then envelope → Available.
@@ -667,7 +678,7 @@ mod data_availability_checker_tests {
         assert_missing(s.put_columns(s.custody.clone()));
         let envelope = assert_available(s.put_envelope());
         assert_eq!(envelope.block_root, s.block_root);
-        assert_eq!(envelope.envelope.columns.len(), s.custody.len());
+        assert_eq!(envelope.envelope.columns().len(), s.custody.len());
     }
 
     /// N-1 columns + envelope is still MissingComponents; the Nth column flips to Available.
@@ -689,7 +700,7 @@ mod data_availability_checker_tests {
     async fn zero_blob_envelope_immediately_available() {
         let s = setup_zero_blob(NodeCustodyType::Fullnode);
         let envelope = assert_available(s.put_envelope());
-        assert!(envelope.envelope.columns.is_empty());
+        assert!(envelope.envelope.columns().is_empty());
     }
 
     /// Receiving the same column twice keeps a single cache entry. Guards `PendingColumn::insert`
