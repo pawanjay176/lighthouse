@@ -1,13 +1,9 @@
 use crate::{BeaconChain, BeaconChainError, BeaconChainTypes, BlockProcessStatus, metrics};
 use execution_layer::{ExecutionLayer, ExecutionPayloadBodyV1};
-use logging::crit;
 use std::collections::HashMap;
 use std::sync::Arc;
 use store::{DatabaseBlock, ExecutionPayloadDeneb};
-use tokio::sync::{
-    RwLock,
-    mpsc::{self, UnboundedSender},
-};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::{Stream, wrappers::UnboundedReceiverStream};
 use tracing::{debug, error};
 use types::{
@@ -29,7 +25,6 @@ pub enum CheckCaches {
 pub enum Error {
     PayloadReconstruction(String),
     BlocksByHashFailure(Box<execution_layer::Error>),
-    RequestNotFound,
     BlockResultNotFound,
 }
 
@@ -41,20 +36,10 @@ enum LoadedBeaconBlock<E: EthSpec> {
 type LoadResult<E> = Result<Option<LoadedBeaconBlock<E>>, BeaconChainError>;
 type BlockResult<E> = Result<Option<Arc<SignedBeaconBlock<E>>>, BeaconChainError>;
 
-enum RequestState<E: EthSpec> {
-    UnSent(Vec<BlockParts<E>>),
-    Sent(HashMap<Hash256, Arc<BlockResult<E>>>),
-}
-
-struct BodiesByHash<E: EthSpec> {
-    state: RequestState<E>,
-}
-
 // stores the components of a block for future re-construction in a small form
 struct BlockParts<E: EthSpec> {
     blinded_block: Box<SignedBlindedBeaconBlock<E>>,
     header: Box<ExecutionPayloadHeader<E>>,
-    body: Option<Box<ExecutionPayloadBodyV1<E>>>,
 }
 
 impl<E: EthSpec> BlockParts<E> {
@@ -65,7 +50,6 @@ impl<E: EthSpec> BlockParts<E> {
         Self {
             blinded_block: blinded,
             header: Box::new(header),
-            body: None,
         }
     }
 
@@ -120,203 +104,38 @@ fn reconstruct_default_header_block<E: EthSpec>(
     }
 }
 
-fn reconstruct_blocks<E: EthSpec>(
-    block_map: &mut HashMap<Hash256, Arc<BlockResult<E>>>,
-    block_parts_with_bodies: HashMap<Hash256, BlockParts<E>>,
-) {
-    for (root, block_parts) in block_parts_with_bodies {
-        if let Some(payload_body) = block_parts.body {
-            match payload_body.to_payload(block_parts.header.as_ref().clone()) {
-                Ok(payload) => {
-                    let header_from_payload = ExecutionPayloadHeader::from(payload.to_ref());
-                    if header_from_payload == *block_parts.header {
-                        block_map.insert(
-                            root,
-                            Arc::new(
-                                block_parts
-                                    .blinded_block
-                                    .try_into_full_block(Some(payload))
-                                    .ok_or(BeaconChainError::AddPayloadLogicError)
-                                    .map(Arc::new)
-                                    .map(Some),
-                            ),
-                        );
-                    } else {
-                        let error = BeaconChainError::InconsistentPayloadReconstructed {
-                            slot: block_parts.blinded_block.slot(),
-                            exec_block_hash: block_parts.header.block_hash(),
-                            canonical_transactions_root: block_parts.header.transactions_root(),
-                            reconstructed_transactions_root: header_from_payload
-                                .transactions_root(),
-                        };
-                        debug!(?root, ?error, "Failed to reconstruct block");
-                        block_map.insert(root, Arc::new(Err(error)));
-                    }
-                }
-                Err(string) => {
-                    block_map.insert(
-                        root,
-                        Arc::new(Err(Error::PayloadReconstruction(string).into())),
-                    );
-                }
-            }
-        } else {
-            block_map.insert(
-                root,
-                Arc::new(Err(BeaconChainError::BlockHashMissingFromExecutionLayer(
-                    block_parts.block_hash(),
-                ))),
-            );
-        }
-    }
-}
+fn reconstruct_block<E: EthSpec>(
+    block_parts: BlockParts<E>,
+    payload_body: Option<ExecutionPayloadBodyV1<E>>,
+) -> BlockResult<E> {
+    let Some(payload_body) = payload_body else {
+        return Err(BeaconChainError::BlockHashMissingFromExecutionLayer(
+            block_parts.block_hash(),
+        ));
+    };
 
-impl<E: EthSpec> BodiesByHash<E> {
-    pub fn new() -> Self {
-        Self {
-            state: RequestState::UnSent(vec![]),
-        }
-    }
-
-    pub fn is_unsent(&self) -> bool {
-        matches!(self.state, RequestState::UnSent(_))
-    }
-
-    pub fn push_block_parts(&mut self, block_parts: BlockParts<E>) {
-        if let RequestState::UnSent(blocks_parts_vec) = &mut self.state {
-            blocks_parts_vec.push(block_parts);
-        }
-    }
-
-    async fn execute(&mut self, execution_layer: &ExecutionLayer<E>) {
-        if let RequestState::UnSent(blocks_parts_ref) = &mut self.state {
-            let block_parts_vec = std::mem::take(blocks_parts_ref);
-            let block_hashes = block_parts_vec
-                .iter()
-                .map(BlockParts::block_hash)
-                .collect::<Vec<_>>();
-
-            let mut block_map = HashMap::new();
-            match execution_layer
-                .get_payload_bodies_by_hash(block_hashes)
-                .await
-            {
-                Ok(bodies) => {
-                    let mut with_bodies = HashMap::new();
-                    for (mut block_parts, maybe_body) in block_parts_vec
-                        .into_iter()
-                        .zip(bodies.into_iter().chain(std::iter::repeat(None)))
-                    {
-                        block_parts.body = maybe_body.map(Box::new);
-                        with_bodies.entry(block_parts.root()).or_insert(block_parts);
-                    }
-
-                    reconstruct_blocks(&mut block_map, with_bodies);
-                }
-                Err(e) => {
-                    let block_result =
-                        Arc::new(Err(Error::BlocksByHashFailure(Box::new(e)).into()));
-                    debug!(error = ?block_result, "Payload bodies by hash failure");
-                    for block_parts in block_parts_vec {
-                        block_map.insert(block_parts.root(), block_result.clone());
-                    }
-                }
-            }
-            self.state = RequestState::Sent(block_map);
-        }
-    }
-
-    pub async fn get_block_result(
-        &mut self,
-        root: &Hash256,
-        execution_layer: &ExecutionLayer<E>,
-    ) -> Option<Arc<BlockResult<E>>> {
-        self.execute(execution_layer).await;
-        if let RequestState::Sent(map) = &self.state {
-            return map.get(root).cloned();
-        }
-        // Shouldn't reach this point
-        None
-    }
-}
-
-#[derive(Clone)]
-enum EngineRequest<E: EthSpec> {
-    ByHash(Arc<RwLock<BodiesByHash<E>>>),
-    // When we already have the data or there's an error
-    NoRequest(Arc<RwLock<HashMap<Hash256, Arc<BlockResult<E>>>>>),
-}
-
-impl<E: EthSpec> EngineRequest<E> {
-    pub fn new_by_hash() -> Self {
-        Self::ByHash(Arc::new(RwLock::new(BodiesByHash::new())))
-    }
-
-    pub fn new_no_request() -> Self {
-        Self::NoRequest(Arc::new(RwLock::new(HashMap::new())))
-    }
-
-    pub async fn is_unsent(&self) -> bool {
-        match self {
-            Self::ByHash(bodies_by_hash) => bodies_by_hash.read().await.is_unsent(),
-            Self::NoRequest(_) => false,
-        }
-    }
-
-    pub async fn push_block_parts(&mut self, block_parts: BlockParts<E>) {
-        match self {
-            Self::ByHash(bodies_by_hash) => {
-                bodies_by_hash.write().await.push_block_parts(block_parts);
-            }
-            Self::NoRequest(_) => {
-                // this should _never_ happen
-                crit!(
-                    beacon_block_streamer = "push_block_parts called on NoRequest Variant",
-                    "Please notify the devs"
-                );
+    match payload_body.to_payload(block_parts.header.as_ref().clone()) {
+        Ok(payload) => {
+            let header_from_payload = ExecutionPayloadHeader::from(payload.to_ref());
+            if header_from_payload == *block_parts.header {
+                block_parts
+                    .blinded_block
+                    .try_into_full_block(Some(payload))
+                    .ok_or(BeaconChainError::AddPayloadLogicError)
+                    .map(Arc::new)
+                    .map(Some)
+            } else {
+                let error = BeaconChainError::InconsistentPayloadReconstructed {
+                    slot: block_parts.blinded_block.slot(),
+                    exec_block_hash: block_parts.header.block_hash(),
+                    canonical_transactions_root: block_parts.header.transactions_root(),
+                    reconstructed_transactions_root: header_from_payload.transactions_root(),
+                };
+                debug!(root = ?block_parts.root(), ?error, "Failed to reconstruct block");
+                Err(error)
             }
         }
-    }
-
-    pub async fn push_block_result(&mut self, root: Hash256, block_result: BlockResult<E>) {
-        // this function will only fail if something is seriously wrong
-        match self {
-            Self::ByHash(_) => {
-                // this should _never_ happen
-                crit!(
-                    beacon_block_streamer = "push_block_result called on ByHash",
-                    "Please notify the devs"
-                );
-            }
-            Self::NoRequest(results) => {
-                results.write().await.insert(root, Arc::new(block_result));
-            }
-        }
-    }
-
-    pub async fn get_block_result(
-        &self,
-        root: &Hash256,
-        execution_layer: &ExecutionLayer<E>,
-    ) -> Arc<BlockResult<E>> {
-        match self {
-            Self::ByHash(by_hash) => {
-                by_hash
-                    .write()
-                    .await
-                    .get_block_result(root, execution_layer)
-                    .await
-            }
-            Self::NoRequest(map) => map.read().await.get(root).cloned(),
-        }
-        .unwrap_or_else(|| {
-            crit!(
-                beacon_block_streamer = "block_result not found in request",
-                ?root,
-                "Please notify the devs"
-            );
-            Arc::new(Err(Error::BlockResultNotFound.into()))
-        })
+        Err(string) => Err(Error::PayloadReconstruction(string).into()),
     }
 }
 
@@ -399,28 +218,15 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
             .await
     }
 
-    /// Pre-process the loaded blocks into execution engine requests.
-    ///
-    /// The purpose of this function is to separate the blocks into 2 categories:
-    /// 1) no_request - when we already have the full block or there's an error
-    /// 2) blocks_by_hash - used for blinded blocks
-    ///
-    /// The function returns a vector of block roots in the same order as requested
-    /// along with the engine request that each root corresponds to.
-    async fn get_requests(
+    /// Process loaded blocks, requesting execution payload bodies only for blinded blocks.
+    async fn process_payloads(
         &self,
         payloads: Vec<(Hash256, LoadResult<T::EthSpec>)>,
-    ) -> Vec<(Hash256, EngineRequest<T::EthSpec>)> {
-        let mut ordered_block_roots = Vec::new();
-        let mut requests = HashMap::new();
-
+    ) -> HashMap<Hash256, Arc<BlockResult<T::EthSpec>>> {
+        let mut results = HashMap::new();
         let mut by_hash_blocks: Vec<BlockParts<T::EthSpec>> = vec![];
-        let mut no_request = EngineRequest::new_no_request();
 
         for (root, load_result) in payloads {
-            // preserve the order of the requested blocks
-            ordered_block_roots.push(root);
-
             let block_result = match load_result {
                 Err(e) => Err(e),
                 Ok(None) => Ok(None),
@@ -450,35 +256,45 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
                 }
             };
 
-            no_request.push_block_result(root, block_result).await;
-            requests.insert(root, no_request.clone());
+            results.insert(root, Arc::new(block_result));
         }
 
-        let mut by_hash = EngineRequest::<T::EthSpec>::new_by_hash();
-        for block_parts in by_hash_blocks {
-            let root = block_parts.root();
-            by_hash.push_block_parts(block_parts).await;
-            requests.insert(root, by_hash.clone());
-        }
+        if !by_hash_blocks.is_empty() {
+            let block_hashes = by_hash_blocks
+                .iter()
+                .map(BlockParts::block_hash)
+                .collect::<Vec<_>>();
 
-        let mut result = vec![];
-        for root in ordered_block_roots {
-            if let Some(request) = requests.get(&root) {
-                result.push((root, request.clone()))
-            } else {
-                crit!(
-                    beacon_block_streamer = "request not found",
-                    ?root,
-                    "Please notify the devs"
-                );
-                no_request
-                    .push_block_result(root, Err(Error::RequestNotFound.into()))
-                    .await;
-                result.push((root, no_request.clone()));
+            match self
+                .execution_layer
+                .get_payload_bodies_by_hash(block_hashes)
+                .await
+            {
+                Ok(bodies) => {
+                    for (block_parts, maybe_body) in by_hash_blocks
+                        .into_iter()
+                        .zip(bodies.into_iter().chain(std::iter::repeat(None)))
+                    {
+                        let root = block_parts.root();
+                        results.entry(root).or_insert_with(|| {
+                            Arc::new(reconstruct_block(block_parts, maybe_body))
+                        });
+                    }
+                }
+                Err(e) => {
+                    let block_result =
+                        Arc::new(Err(Error::BlocksByHashFailure(Box::new(e)).into()));
+                    debug!(error = ?block_result, "Payload bodies by hash failure");
+                    for block_parts in by_hash_blocks {
+                        results
+                            .entry(block_parts.root())
+                            .or_insert(block_result.clone());
+                    }
+                }
             }
         }
 
-        result
+        results
     }
 
     // used when the execution engine doesn't support the payload bodies methods
@@ -513,7 +329,7 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
         let n_roots = block_roots.len();
         let mut n_success = 0usize;
         let mut n_sent = 0usize;
-        let mut engine_requests = 0usize;
+        let ordered_roots = block_roots.clone();
 
         let payloads = match self.load_payloads(block_roots).await {
             Ok(payloads) => payloads,
@@ -525,15 +341,13 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
                 return;
             }
         };
-        let requests = self.get_requests(payloads).await;
+        let results = self.process_payloads(payloads).await;
 
-        for (root, request) in requests {
-            if request.is_unsent().await {
-                engine_requests += 1;
-            }
-
-            let result = request.get_block_result(&root, &self.execution_layer).await;
-
+        for root in ordered_roots {
+            let result = results
+                .get(&root)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(Err(Error::BlockResultNotFound.into())));
             let successful = result
                 .as_ref()
                 .as_ref()
@@ -555,7 +369,6 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
             sent = n_sent,
             succeeded = n_success,
             failed = (n_sent - n_success),
-            engine_requests,
             "BeaconBlockStreamer finished"
         );
     }
