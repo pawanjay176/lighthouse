@@ -1,6 +1,5 @@
 use crate::{BeaconChain, BeaconChainError, BeaconChainTypes, BlockProcessStatus, metrics};
 use execution_layer::{ExecutionLayer, ExecutionPayloadBodyV1};
-use std::collections::HashMap;
 use std::sync::Arc;
 use store::{DatabaseBlock, ExecutionPayloadDeneb};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -15,6 +14,10 @@ use types::{
     ExecutionPayloadFulu, ExecutionPayloadGloas, ExecutionPayloadHeader,
 };
 
+/// The engine API only requires execution layers to support payload body requests for at least
+/// 32 blocks, so larger requests are split into chunks of this size.
+const MAX_PAYLOAD_BODIES_PER_REQUEST: usize = 32;
+
 #[derive(PartialEq)]
 pub enum CheckCaches {
     Yes,
@@ -25,15 +28,9 @@ pub enum CheckCaches {
 pub enum Error {
     PayloadReconstruction(String),
     BlocksByHashFailure(Box<execution_layer::Error>),
-    BlockResultNotFound,
+    InvalidPayloadBodiesResponse { expected: usize, received: usize },
 }
 
-// This is the same as a DatabaseBlock but the Arc allows us to avoid an unnecessary clone.
-enum LoadedBeaconBlock<E: EthSpec> {
-    Full(Arc<SignedBeaconBlock<E>>),
-    Blinded(Box<SignedBlindedBeaconBlock<E>>),
-}
-type LoadResult<E> = Result<Option<LoadedBeaconBlock<E>>, BeaconChainError>;
 type BlockResult<E> = Result<Option<Arc<SignedBeaconBlock<E>>>, BeaconChainError>;
 
 // stores the components of a block for future re-construction in a small form
@@ -60,6 +57,13 @@ impl<E: EthSpec> BlockParts<E> {
     pub fn block_hash(&self) -> ExecutionBlockHash {
         self.header.block_hash()
     }
+}
+
+/// A block loaded from the caches or database, which is either complete or requires its
+/// execution payload to be fetched from the execution layer.
+enum LoadedBlock<E: EthSpec> {
+    Complete(BlockResult<E>),
+    NeedsPayload(BlockParts<E>),
 }
 
 fn reconstruct_default_header_block<E: EthSpec>(
@@ -178,123 +182,153 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
         }
     }
 
-    async fn load_payloads(
-        self: &Arc<Self>,
-        block_roots: Vec<Hash256>,
-    ) -> Result<Vec<(Hash256, LoadResult<T::EthSpec>)>, BeaconChainError> {
-        let streamer = self.clone();
-        // Loading from the DB is slow -> spawn a blocking task
-        self.beacon_chain
-            .spawn_blocking_handle(
-                move || {
-                    let mut db_blocks = Vec::new();
-                    for root in block_roots {
-                        if let Some(cached_block) =
-                            streamer.check_caches(root).map(LoadedBeaconBlock::Full)
-                        {
-                            db_blocks.push((root, Ok(Some(cached_block))));
-                            continue;
-                        }
-
-                        match streamer.beacon_chain.store.try_get_full_block(&root) {
-                            Err(e) => db_blocks.push((root, Err(e.into()))),
-                            Ok(opt_block) => db_blocks.push((
-                                root,
-                                Ok(opt_block.map(|db_block| match db_block {
-                                    DatabaseBlock::Full(block) => {
-                                        LoadedBeaconBlock::Full(Arc::new(block))
-                                    }
-                                    DatabaseBlock::Blinded(block) => {
-                                        LoadedBeaconBlock::Blinded(Box::new(block))
-                                    }
-                                })),
-                            )),
-                        }
-                    }
-                    db_blocks
-                },
-                "load_beacon_blocks",
-            )
-            .await
-    }
-
-    /// Process loaded blocks, requesting execution payload bodies only for blinded blocks.
-    async fn process_payloads(
-        &self,
-        payloads: Vec<(Hash256, LoadResult<T::EthSpec>)>,
-    ) -> HashMap<Hash256, Arc<BlockResult<T::EthSpec>>> {
-        let mut results = HashMap::new();
-        let mut by_hash_blocks: Vec<BlockParts<T::EthSpec>> = vec![];
-
-        for (root, load_result) in payloads {
-            let block_result = match load_result {
-                Err(e) => Err(e),
-                Ok(None) => Ok(None),
-                Ok(Some(LoadedBeaconBlock::Full(full_block))) => Ok(Some(full_block)),
-                Ok(Some(LoadedBeaconBlock::Blinded(blinded_block))) => {
-                    match blinded_block
-                        .message()
-                        .execution_payload()
-                        .map(|payload| payload.to_execution_payload_header())
-                    {
-                        Ok(header) => {
-                            if header.block_hash() == ExecutionBlockHash::zero() {
-                                reconstruct_default_header_block(
-                                    blinded_block,
-                                    header,
-                                    &self.beacon_chain.spec,
-                                )
-                            } else {
-                                // Add the block to the set requiring an execution layer request.
-                                let block_parts = BlockParts::new(blinded_block, header);
-                                by_hash_blocks.push(block_parts);
-                                continue;
-                            }
-                        }
-                        Err(e) => Err(BeaconChainError::BeaconStateError(e)),
-                    }
-                }
-            };
-
-            results.insert(root, Arc::new(block_result));
+    /// Load a block from the caches or the database. Blinded blocks with a non-default payload
+    /// header are returned as `NeedsPayload` for reconstruction via the execution layer.
+    fn load_block(&self, root: Hash256) -> LoadedBlock<T::EthSpec> {
+        if let Some(cached_block) = self.check_caches(root) {
+            return LoadedBlock::Complete(Ok(Some(cached_block)));
         }
 
-        if !by_hash_blocks.is_empty() {
-            let block_hashes = by_hash_blocks
-                .iter()
-                .map(BlockParts::block_hash)
-                .collect::<Vec<_>>();
-
-            match self
-                .execution_layer
-                .get_payload_bodies_by_hash(block_hashes)
-                .await
-            {
-                Ok(bodies) => {
-                    for (block_parts, maybe_body) in by_hash_blocks
-                        .into_iter()
-                        .zip(bodies.into_iter().chain(std::iter::repeat(None)))
-                    {
-                        let root = block_parts.root();
-                        results.entry(root).or_insert_with(|| {
-                            Arc::new(reconstruct_block(block_parts, maybe_body))
-                        });
-                    }
-                }
-                Err(e) => {
-                    let block_result =
-                        Arc::new(Err(Error::BlocksByHashFailure(Box::new(e)).into()));
-                    debug!(error = ?block_result, "Payload bodies by hash failure");
-                    for block_parts in by_hash_blocks {
-                        results
-                            .entry(block_parts.root())
-                            .or_insert(block_result.clone());
+        match self.beacon_chain.store.try_get_full_block(&root) {
+            Err(e) => LoadedBlock::Complete(Err(e.into())),
+            Ok(None) => LoadedBlock::Complete(Ok(None)),
+            Ok(Some(DatabaseBlock::Full(block))) => {
+                LoadedBlock::Complete(Ok(Some(Arc::new(block))))
+            }
+            Ok(Some(DatabaseBlock::Blinded(block))) => {
+                match block
+                    .message()
+                    .execution_payload()
+                    .map(|payload| payload.to_execution_payload_header())
+                {
+                    Err(e) => LoadedBlock::Complete(Err(BeaconChainError::BeaconStateError(e))),
+                    Ok(header) => {
+                        if header.block_hash() == ExecutionBlockHash::zero() {
+                            LoadedBlock::Complete(reconstruct_default_header_block(
+                                Box::new(block),
+                                header,
+                                &self.beacon_chain.spec,
+                            ))
+                        } else {
+                            LoadedBlock::NeedsPayload(BlockParts::new(Box::new(block), header))
+                        }
                     }
                 }
             }
         }
+    }
 
-        results
+    /// Fetch payload bodies for `block_hashes` from the execution layer.
+    ///
+    /// The returned vec has the same length and order as `block_hashes`. A body the execution
+    /// layer doesn't know about is `None`.
+    async fn fetch_payload_bodies(
+        &self,
+        block_hashes: Vec<ExecutionBlockHash>,
+    ) -> Result<Vec<Option<ExecutionPayloadBodyV1<T::EthSpec>>>, Error> {
+        let mut bodies = Vec::with_capacity(block_hashes.len());
+        for chunk in block_hashes.chunks(MAX_PAYLOAD_BODIES_PER_REQUEST) {
+            let chunk_bodies = self
+                .execution_layer
+                .get_payload_bodies_by_hash(chunk.to_vec())
+                .await
+                .map_err(|e| Error::BlocksByHashFailure(Box::new(e)))?;
+
+            if chunk_bodies.len() != chunk.len() {
+                return Err(Error::InvalidPayloadBodiesResponse {
+                    expected: chunk.len(),
+                    received: chunk_bodies.len(),
+                });
+            }
+            bodies.extend(chunk_bodies);
+        }
+        Ok(bodies)
+    }
+
+    async fn stream_blocks(
+        self: Arc<Self>,
+        block_roots: Vec<Hash256>,
+        sender: UnboundedSender<(Hash256, Arc<BlockResult<T::EthSpec>>)>,
+    ) {
+        let n_roots = block_roots.len();
+
+        let streamer = self.clone();
+        // Loading from the DB is slow -> spawn a blocking task
+        let loaded_blocks = match self
+            .beacon_chain
+            .spawn_blocking_handle(
+                move || {
+                    block_roots
+                        .into_iter()
+                        .map(|root| (root, streamer.load_block(root)))
+                        .collect::<Vec<_>>()
+                },
+                "load_beacon_blocks",
+            )
+            .await
+        {
+            Ok(loaded_blocks) => loaded_blocks,
+            Err(e) => {
+                error!(
+                    error = ?e,
+                    "BeaconBlockStreamer: Failed to load blocks"
+                );
+                return;
+            }
+        };
+
+        let block_hashes = loaded_blocks
+            .iter()
+            .filter_map(|(_, loaded)| match loaded {
+                LoadedBlock::NeedsPayload(block_parts) => Some(block_parts.block_hash()),
+                LoadedBlock::Complete(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut bodies = match self.fetch_payload_bodies(block_hashes).await {
+            Ok(bodies) => bodies.into_iter(),
+            Err(e) => {
+                error!(
+                    error = ?e,
+                    "BeaconBlockStreamer: Failed to fetch payload bodies"
+                );
+                return;
+            }
+        };
+
+        let mut n_sent = 0usize;
+        let mut n_success = 0usize;
+        for (root, loaded) in loaded_blocks {
+            let result = match loaded {
+                LoadedBlock::Complete(block_result) => Arc::new(block_result),
+                // `bodies` has one entry per `NeedsPayload` block, in order.
+                LoadedBlock::NeedsPayload(block_parts) => {
+                    Arc::new(reconstruct_block(block_parts, bodies.next().flatten()))
+                }
+            };
+
+            let successful = result
+                .as_ref()
+                .as_ref()
+                .map(|opt| opt.is_some())
+                .unwrap_or(false);
+
+            if sender.send((root, result)).is_err() {
+                break;
+            } else {
+                n_sent += 1;
+                if successful {
+                    n_success += 1;
+                }
+            }
+        }
+
+        debug!(
+            requested_blocks = n_roots,
+            sent = n_sent,
+            succeeded = n_success,
+            failed = (n_sent - n_success),
+            "BeaconBlockStreamer finished"
+        );
     }
 
     // used when the execution engine doesn't support the payload bodies methods
@@ -321,80 +355,28 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
         }
     }
 
-    async fn stream_blocks(
-        self: Arc<Self>,
-        block_roots: Vec<Hash256>,
-        sender: UnboundedSender<(Hash256, Arc<BlockResult<T::EthSpec>>)>,
-    ) {
-        let n_roots = block_roots.len();
-        let mut n_success = 0usize;
-        let mut n_sent = 0usize;
-        let ordered_roots = block_roots.clone();
-
-        let payloads = match self.load_payloads(block_roots).await {
-            Ok(payloads) => payloads,
-            Err(e) => {
-                error!(
-                    error = ?e,
-                    "BeaconBlockStreamer: Failed to load payloads"
-                );
-                return;
-            }
-        };
-        let results = self.process_payloads(payloads).await;
-
-        for root in ordered_roots {
-            let result = results
-                .get(&root)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(Err(Error::BlockResultNotFound.into())));
-            let successful = result
-                .as_ref()
-                .as_ref()
-                .map(|opt| opt.is_some())
-                .unwrap_or(false);
-
-            if sender.send((root, result)).is_err() {
-                break;
-            } else {
-                n_sent += 1;
-                if successful {
-                    n_success += 1;
-                }
-            }
-        }
-
-        debug!(
-            requested_blocks = n_roots,
-            sent = n_sent,
-            succeeded = n_success,
-            failed = (n_sent - n_success),
-            "BeaconBlockStreamer finished"
-        );
-    }
-
     pub async fn stream(
         self: Arc<Self>,
         block_roots: Vec<Hash256>,
         sender: UnboundedSender<(Hash256, Arc<BlockResult<T::EthSpec>>)>,
     ) {
-        match self
-            .execution_layer
-            .get_engine_capabilities(None)
-            .await
-            .map_err(Box::new)
-            .map_err(BeaconChainError::EngineGetCapabilititesFailed)
-        {
-            Ok(engine_capabilities) => {
-                if engine_capabilities.get_payload_bodies_by_hash_v1 {
-                    self.stream_blocks(block_roots, sender).await;
-                } else {
-                    // use the fallback method
-                    self.stream_blocks_fallback(block_roots, sender).await;
-                }
+        match self.execution_layer.get_engine_capabilities(None).await {
+            Ok(capabilities) if capabilities.get_payload_bodies_by_hash_v1 => {
+                self.stream_blocks(block_roots, sender).await;
+            }
+            Ok(_) => {
+                // use the fallback method
+                self.stream_blocks_fallback(block_roots, sender).await;
             }
             Err(e) => {
-                send_errors(block_roots, sender, e).await;
+                let result = Arc::new(Err(BeaconChainError::EngineGetCapabilititesFailed(
+                    Box::new(e),
+                )));
+                for root in block_roots {
+                    if sender.send((root, result.clone())).is_err() {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -411,19 +393,6 @@ impl<T: BeaconChainTypes> BeaconBlockStreamer<T> {
         let executor = self.beacon_chain.task_executor.clone();
         executor.spawn(self.stream(block_roots, block_tx), "get_blocks_sender");
         UnboundedReceiverStream::new(block_rx)
-    }
-}
-
-async fn send_errors<E: EthSpec>(
-    block_roots: Vec<Hash256>,
-    sender: UnboundedSender<(Hash256, Arc<BlockResult<E>>)>,
-    beacon_chain_error: BeaconChainError,
-) {
-    let result = Arc::new(Err(beacon_chain_error));
-    for root in block_roots {
-        if sender.send((root, result.clone())).is_err() {
-            break;
-        }
     }
 }
 
