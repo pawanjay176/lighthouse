@@ -1233,6 +1233,108 @@ mod tests {
     }
 
     #[test]
+    fn optimistic_payload_status_transitions() {
+        let spec = gloas_spec();
+        let shuffling_id = AttestationShufflingId::from_components(Epoch::new(0), Hash256::zero());
+        let mut fork_choice = ProtoArrayForkChoice::new::<MainnetEthSpec>(
+            Slot::new(0),
+            Slot::new(0),
+            Hash256::zero(),
+            get_checkpoint(0),
+            get_checkpoint(0),
+            shuffling_id.clone(),
+            shuffling_id.clone(),
+            ExecutionStatus::irrelevant(),
+            Some(get_hash(0)),
+            Some(get_hash(0)),
+            0,
+            &spec,
+        )
+        .expect("should create fork choice");
+
+        fork_choice
+            .process_block::<MainnetEthSpec>(
+                Block {
+                    slot: Slot::new(1),
+                    root: get_root(1),
+                    parent_root: Some(get_root(0)),
+                    state_root: Hash256::zero(),
+                    target_root: Hash256::zero(),
+                    current_epoch_shuffling_id: shuffling_id.clone(),
+                    next_epoch_shuffling_id: shuffling_id,
+                    justified_checkpoint: get_checkpoint(0),
+                    finalized_checkpoint: get_checkpoint(0),
+                    execution_status: ExecutionStatus::irrelevant(),
+                    unrealized_justified_checkpoint: None,
+                    unrealized_finalized_checkpoint: None,
+                    execution_payload_parent_hash: Some(get_hash(0)),
+                    execution_payload_block_hash: Some(get_hash(1)),
+                    proposer_index: Some(0),
+                },
+                Slot::new(1),
+                &spec,
+                Duration::ZERO,
+            )
+            .expect("should process block");
+
+        assert!(!fork_choice.is_payload_received(&get_root(1)));
+        fork_choice
+            .on_payload_envelope_imported(get_root(1), crate::PayloadExecutionStatus::Optimistic)
+            .expect("should import optimistic envelope");
+        assert!(fork_choice.is_payload_received(&get_root(1)));
+        assert_eq!(
+            fork_choice.get_payload_execution_status(&get_root(1)),
+            Some(crate::PayloadExecutionStatus::Optimistic)
+        );
+        assert_eq!(
+            fork_choice
+                .get_canonical_payload_status::<MainnetEthSpec>(
+                    &get_root(1),
+                    Slot::new(1),
+                    Hash256::zero(),
+                    &spec,
+                )
+                .expect("should get payload status"),
+            PayloadStatus::Full
+        );
+
+        fork_choice
+            .process_payload_envelope_validation(get_root(1))
+            .expect("should validate optimistic envelope");
+        assert_eq!(
+            fork_choice.get_payload_execution_status(&get_root(1)),
+            Some(crate::PayloadExecutionStatus::Valid)
+        );
+
+        fork_choice
+            .on_payload_envelope_imported(get_root(1), crate::PayloadExecutionStatus::Optimistic)
+            .expect("should reset test envelope to optimistic");
+        fork_choice
+            .process_execution_payload_invalidation::<MainnetEthSpec>(
+                &InvalidationOperation::InvalidateOne {
+                    block_root: get_root(1),
+                },
+                get_checkpoint(0),
+            )
+            .expect("should invalidate optimistic envelope");
+        assert_eq!(
+            fork_choice.get_payload_execution_status(&get_root(1)),
+            Some(crate::PayloadExecutionStatus::Invalid)
+        );
+        assert_eq!(
+            fork_choice
+                .get_canonical_payload_status::<MainnetEthSpec>(
+                    &get_root(1),
+                    Slot::new(1),
+                    Hash256::zero(),
+                    &spec,
+                )
+                .expect("should get payload status"),
+            PayloadStatus::Empty
+        );
+    }
+
+    #[test]
     fn previous_slot_tiebreaker() {
         let test = get_gloas_previous_slot_tiebreaker_test_definition();
         test.run();

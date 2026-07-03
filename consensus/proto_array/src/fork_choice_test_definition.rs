@@ -573,10 +573,18 @@ impl ForkChoiceTestDefinition {
                     // Per spec, payload_timeliness/payload_data_availability require
                     // the payload to be in payload_states (payload_received).
                     node_v29.payload_received = is_timely || is_data_available;
+                    node_v29.payload_execution_status = if node_v29.payload_received {
+                        crate::PayloadExecutionStatus::Valid
+                    } else {
+                        crate::PayloadExecutionStatus::Missing
+                    };
                 }
                 Operation::ProcessExecutionPayloadEnvelope { block_root } => {
                     fork_choice
-                        .on_valid_payload_envelope_received(block_root)
+                        .on_payload_envelope_imported(
+                            block_root,
+                            crate::PayloadExecutionStatus::Valid,
+                        )
                         .unwrap_or_else(|e| {
                             panic!(
                                 "on_execution_payload op at index {} returned error: {}",

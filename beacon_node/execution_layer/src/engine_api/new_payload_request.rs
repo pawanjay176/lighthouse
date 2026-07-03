@@ -269,9 +269,13 @@ impl<'a, E: EthSpec> TryFrom<ExecutionPayloadRef<'a, E>> for NewPayloadRequest<'
 #[cfg(test)]
 mod test {
     use crate::versioned_hashes::Error as VersionedHashError;
-    use crate::{Error, NewPayloadRequest};
+    use crate::{Error, NewPayloadRequest, NewPayloadRequestGloas, calculate_execution_block_hash};
+    use bls::{PublicKeyBytes, SignatureBytes};
     use state_processing::per_block_processing::deneb::kzg_commitment_to_versioned_hash;
-    use types::{BeaconBlock, ExecPayload, ExecutionBlockHash, Hash256, MainnetEthSpec};
+    use types::{
+        BeaconBlock, DepositRequest, ExecPayload, ExecutionBlockHash, ExecutionPayloadGloas,
+        ExecutionPayloadRef, ExecutionRequests, Hash256, MainnetEthSpec, Slot, VersionedHash,
+    };
 
     #[test]
     fn test_optimistic_sync_verifications_valid_block() {
@@ -362,6 +366,166 @@ mod test {
             _ => false,
         };
         assert!(got_expected_result, "should return expected error");
+    }
+
+    #[test]
+    fn test_optimistic_sync_verifications_valid_gloas_envelope_payload() {
+        let (payload, versioned_hashes, parent_beacon_block_root, execution_requests) =
+            get_valid_gloas_payload_request_parts();
+
+        let new_payload_request = get_gloas_new_payload_request(
+            &payload,
+            versioned_hashes,
+            parent_beacon_block_root,
+            &execution_requests,
+        );
+
+        assert!(
+            new_payload_request
+                .perform_optimistic_sync_verifications()
+                .is_ok(),
+            "Gloas envelope payload validations should pass"
+        );
+    }
+
+    #[test]
+    fn test_optimistic_sync_verifications_gloas_bad_block_hash() {
+        let (mut payload, versioned_hashes, parent_beacon_block_root, execution_requests) =
+            get_valid_gloas_payload_request_parts();
+        let correct_block_hash = payload.block_hash;
+        let invalid_block_hash = ExecutionBlockHash::repeat_byte(0x42);
+
+        payload.block_hash = invalid_block_hash;
+
+        let new_payload_request = get_gloas_new_payload_request(
+            &payload,
+            versioned_hashes,
+            parent_beacon_block_root,
+            &execution_requests,
+        );
+        let verification_result = new_payload_request.perform_optimistic_sync_verifications();
+
+        let got_expected_result = match verification_result {
+            Err(Error::BlockHashMismatch {
+                computed, payload, ..
+            }) => computed == correct_block_hash && payload == invalid_block_hash,
+            _ => false,
+        };
+        assert!(got_expected_result, "should return expected error");
+    }
+
+    #[test]
+    fn test_optimistic_sync_verifications_gloas_parent_root_affects_block_hash() {
+        let (payload, versioned_hashes, _parent_beacon_block_root, execution_requests) =
+            get_valid_gloas_payload_request_parts();
+        let wrong_parent_beacon_block_root = Hash256::repeat_byte(0x43);
+
+        let new_payload_request = get_gloas_new_payload_request(
+            &payload,
+            versioned_hashes,
+            wrong_parent_beacon_block_root,
+            &execution_requests,
+        );
+        let verification_result = new_payload_request.perform_optimistic_sync_verifications();
+
+        let got_expected_result = match verification_result {
+            Err(Error::BlockHashMismatch {
+                computed,
+                payload: claimed,
+                ..
+            }) => computed != claimed && claimed == payload.block_hash,
+            _ => false,
+        };
+        assert!(got_expected_result, "should return expected error");
+    }
+
+    #[test]
+    fn test_optimistic_sync_verifications_gloas_execution_requests_affect_block_hash() {
+        let (payload, versioned_hashes, parent_beacon_block_root, execution_requests) =
+            get_valid_gloas_payload_request_parts();
+        let empty_execution_requests = ExecutionRequests::default();
+        assert_ne!(
+            execution_requests.requests_hash(),
+            empty_execution_requests.requests_hash(),
+            "test setup should use distinct execution request roots"
+        );
+
+        let new_payload_request = get_gloas_new_payload_request(
+            &payload,
+            versioned_hashes,
+            parent_beacon_block_root,
+            &empty_execution_requests,
+        );
+        let verification_result = new_payload_request.perform_optimistic_sync_verifications();
+
+        let got_expected_result = match verification_result {
+            Err(Error::BlockHashMismatch {
+                computed,
+                payload: claimed,
+                ..
+            }) => computed != claimed && claimed == payload.block_hash,
+            _ => false,
+        };
+        assert!(got_expected_result, "should return expected error");
+    }
+
+    type GloasPayloadRequestParts = (
+        ExecutionPayloadGloas<MainnetEthSpec>,
+        Vec<VersionedHash>,
+        Hash256,
+        ExecutionRequests<MainnetEthSpec>,
+    );
+
+    fn get_valid_gloas_payload_request_parts() -> GloasPayloadRequestParts {
+        let parent_beacon_block_root = Hash256::repeat_byte(0x11);
+        let mut execution_requests = ExecutionRequests::default();
+        execution_requests
+            .deposits
+            .push(DepositRequest {
+                pubkey: PublicKeyBytes::empty(),
+                withdrawal_credentials: Hash256::repeat_byte(0x22),
+                amount: 32_000_000_000,
+                signature: SignatureBytes::empty(),
+                index: 1,
+            })
+            .expect("should push deposit request");
+
+        let mut payload = ExecutionPayloadGloas {
+            parent_hash: ExecutionBlockHash::repeat_byte(0x33),
+            block_number: 1,
+            gas_limit: 30_000_000,
+            timestamp: 1,
+            slot_number: Slot::new(1),
+            ..Default::default()
+        };
+
+        let (block_hash, _) = calculate_execution_block_hash(
+            ExecutionPayloadRef::Gloas(&payload),
+            Some(parent_beacon_block_root),
+            Some(&execution_requests),
+        );
+        payload.block_hash = block_hash;
+
+        (
+            payload,
+            vec![],
+            parent_beacon_block_root,
+            execution_requests,
+        )
+    }
+
+    fn get_gloas_new_payload_request<'a>(
+        payload: &'a ExecutionPayloadGloas<MainnetEthSpec>,
+        versioned_hashes: Vec<VersionedHash>,
+        parent_beacon_block_root: Hash256,
+        execution_requests: &'a ExecutionRequests<MainnetEthSpec>,
+    ) -> NewPayloadRequest<'a, MainnetEthSpec> {
+        NewPayloadRequest::Gloas(NewPayloadRequestGloas {
+            execution_payload: payload,
+            versioned_hashes,
+            parent_beacon_block_root,
+            execution_requests,
+        })
     }
 
     fn get_valid_beacon_block() -> BeaconBlock<MainnetEthSpec> {

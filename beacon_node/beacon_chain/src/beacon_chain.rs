@@ -1680,9 +1680,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         head_block_root: Hash256,
     ) -> Result<(Vec<Option<AttestationDuty>>, Hash256, ExecutionStatus), Error> {
         let execution_status = self
-            .canonical_head
-            .fork_choice_read_lock()
-            .get_block_execution_status(&head_block_root)
+            .block_execution_status_for_duty(&head_block_root)?
             .ok_or(Error::AttestationHeadNotInForkChoice(head_block_root))?;
 
         let (duties, dependent_root) = self.with_committee_cache(
@@ -1859,16 +1857,32 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     /// Returns `Ok(attestation)` if the supplied `attestation` references a valid
     /// `beacon_block_root`.
+    pub(crate) fn block_execution_status_for_duty(
+        &self,
+        beacon_block_root: &Hash256,
+    ) -> Result<Option<ExecutionStatus>, Error> {
+        let fork_choice = self.canonical_head.fork_choice_read_lock();
+        if fork_choice
+            .get_payload_execution_status(beacon_block_root)
+            .is_some()
+        {
+            let payload_status =
+                fork_choice.get_canonical_payload_status(beacon_block_root, &self.spec)?;
+            Ok(fork_choice
+                .get_block_execution_status_for_payload(beacon_block_root, payload_status))
+        } else {
+            Ok(fork_choice.get_block_execution_status(beacon_block_root))
+        }
+    }
+
+    /// Returns `Ok(attestation)` if the supplied `attestation` references a valid
+    /// `beacon_block_root`.
     fn filter_optimistic_attestation(
         &self,
         attestation: Attestation<T::EthSpec>,
     ) -> Result<Attestation<T::EthSpec>, Error> {
         let beacon_block_root = attestation.data().beacon_block_root;
-        match self
-            .canonical_head
-            .fork_choice_read_lock()
-            .get_block_execution_status(&beacon_block_root)
-        {
+        match self.block_execution_status_for_duty(&beacon_block_root)? {
             // The attestation references a block that is not in fork choice, it must be
             // pre-finalization.
             None => Err(Error::CannotAttestToFinalizedBlock { beacon_block_root }),
@@ -1905,11 +1919,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         contribution: SyncCommitteeContribution<T::EthSpec>,
     ) -> Result<SyncCommitteeContribution<T::EthSpec>, Error> {
         let beacon_block_root = contribution.beacon_block_root;
-        match self
-            .canonical_head
-            .fork_choice_read_lock()
-            .get_block_execution_status(&beacon_block_root)
-        {
+        match self.block_execution_status_for_duty(&beacon_block_root)? {
             // The contribution references a block that is not in fork choice, it must be
             // pre-finalization.
             None => Err(Error::SyncContributionDataReferencesFinalizedBlock { beacon_block_root }),
@@ -2071,11 +2081,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         drop(head_timer);
 
         // Only attest to a block if it is fully verified (i.e. not optimistic or invalid).
-        match self
-            .canonical_head
-            .fork_choice_read_lock()
-            .get_block_execution_status(&beacon_block_root)
-        {
+        match self.block_execution_status_for_duty(&beacon_block_root)? {
             Some(execution_status) if execution_status.is_valid_or_irrelevant() => (),
             Some(execution_status) => {
                 return Err(Error::HeadBlockNotFullyVerified {
@@ -2175,6 +2181,17 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         }
 
         let beacon_block_root = head.beacon_block_root;
+
+        match self.block_execution_status_for_duty(&beacon_block_root)? {
+            Some(execution_status) if execution_status.is_valid_or_irrelevant() => (),
+            Some(execution_status) => {
+                return Err(Error::HeadBlockNotFullyVerified {
+                    beacon_block_root,
+                    execution_status,
+                });
+            }
+            None => return Err(Error::HeadMissingFromForkChoice(beacon_block_root)),
+        };
 
         // TODO(gloas) do we want to use a dedicated envelope cache instead?
         // Maybe the new gloas DA cache? (Or should the gloas DA cache use
@@ -6678,6 +6695,19 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         match forkchoice_updated_response {
             Ok(status) => match status {
                 PayloadStatus::Valid => {
+                    let (valid_block_root, valid_payload_status) = {
+                        let fork_choice = self.canonical_head.fork_choice_read_lock();
+                        let valid_block_root = fork_choice
+                            .execution_block_hash_to_beacon_block_root(&head_hash)
+                            .unwrap_or(head_block_root);
+                        let valid_payload_status = if valid_block_root == head_block_root {
+                            head_payload_status
+                        } else {
+                            fork_choice::PayloadStatus::Full
+                        };
+                        (valid_block_root, valid_payload_status)
+                    };
+
                     // Ensure that fork choice knows that the block is no longer optimistic.
                     let chain = self.clone();
                     let fork_choice_update_result = self
@@ -6686,7 +6716,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                                 chain
                                     .canonical_head
                                     .fork_choice_write_lock()
-                                    .on_valid_execution_payload(head_block_root)
+                                    .on_valid_forkchoice_payload(
+                                        valid_block_root,
+                                        valid_payload_status,
+                                    )
                             },
                             "update_execution_engine_valid_payload",
                         )
@@ -6719,6 +6752,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     latest_valid_hash,
                     ref validation_error,
                 } => {
+                    let invalid_head_block_root = self
+                        .canonical_head
+                        .fork_choice_read_lock()
+                        .execution_block_hash_to_beacon_block_root(&head_hash)
+                        .unwrap_or(head_block_root);
+
                     warn!(
                         ?validation_error,
                         ?latest_valid_hash,
@@ -6748,7 +6787,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         Some(hash) if hash == ExecutionBlockHash::zero() => {
                             self.process_invalid_execution_payload(
                                 &InvalidationOperation::InvalidateOne {
-                                    block_root: head_block_root,
+                                    block_root: invalid_head_block_root,
                                 },
                             )
                             .await?;
@@ -6758,7 +6797,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         Some(latest_valid_hash) => {
                             self.process_invalid_execution_payload(
                                 &InvalidationOperation::InvalidateMany {
-                                    head_block_root,
+                                    head_block_root: invalid_head_block_root,
                                     always_invalidate_head: true,
                                     latest_valid_ancestor: latest_valid_hash,
                                 },
@@ -6772,6 +6811,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 PayloadStatus::InvalidBlockHash {
                     ref validation_error,
                 } => {
+                    let invalid_head_block_root = self
+                        .canonical_head
+                        .fork_choice_read_lock()
+                        .execution_block_hash_to_beacon_block_root(&head_hash)
+                        .unwrap_or(head_block_root);
+
                     warn!(
                         ?validation_error,
                         ?head_hash,
@@ -6785,7 +6830,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     // Using a `None` latest valid ancestor will result in only the head block
                     // being invalidated (no ancestors).
                     self.process_invalid_execution_payload(&InvalidationOperation::InvalidateOne {
-                        block_root: head_block_root,
+                        block_root: invalid_head_block_root,
                     })
                     .await?;
 
@@ -6816,10 +6861,23 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         if self.slot_is_prior_to_bellatrix(block.slot()) {
             Ok(false)
         } else {
-            self.canonical_head
-                .fork_choice_read_lock()
-                .is_optimistic_or_invalid_block(&block.canonical_root())
-                .map_err(BeaconChainError::ForkChoiceError)
+            let block_root = block.canonical_root();
+            let fork_choice = self.canonical_head.fork_choice_read_lock();
+            if fork_choice
+                .get_payload_execution_status(&block_root)
+                .is_some()
+            {
+                let payload_status = fork_choice
+                    .get_canonical_payload_status(&block_root, &self.spec)
+                    .map_err(BeaconChainError::ForkChoiceError)?;
+                fork_choice
+                    .is_optimistic_or_invalid_payload(&block_root, payload_status)
+                    .map_err(BeaconChainError::ForkChoiceError)
+            } else {
+                fork_choice
+                    .is_optimistic_or_invalid_block(&block_root)
+                    .map_err(BeaconChainError::ForkChoiceError)
+            }
         }
     }
 
@@ -6842,9 +6900,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         if self.slot_is_prior_to_bellatrix(head_block.slot()) {
             Ok(false)
         } else {
-            self.canonical_head
-                .fork_choice_read_lock()
-                .is_optimistic_or_invalid_block_no_fallback(&head_block.canonical_root())
+            let block_root = head_block.canonical_root();
+            let fork_choice = self.canonical_head.fork_choice_read_lock();
+            let payload_status = self.canonical_head.cached_head().head_payload_status();
+            fork_choice
+                .is_optimistic_or_invalid_payload(&block_root, payload_status)
                 .map_err(BeaconChainError::ForkChoiceError)
         }
     }
@@ -6858,9 +6918,14 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// There is a potential race condition when syncing where the block root of `head_info` could
     /// be pruned from the fork choice store before being read.
     pub fn is_optimistic_or_invalid_head(&self) -> Result<bool, BeaconChainError> {
+        let cached_head = self.canonical_head.cached_head();
         self.canonical_head
-            .head_execution_status()
-            .map(|status| status.is_optimistic_or_invalid())
+            .fork_choice_read_lock()
+            .is_optimistic_or_invalid_payload(
+                &cached_head.head_block_root(),
+                cached_head.head_payload_status(),
+            )
+            .map_err(BeaconChainError::ForkChoiceError)
     }
 
     pub fn is_optimistic_or_invalid_block_root(
@@ -6872,10 +6937,22 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         if self.slot_is_prior_to_bellatrix(block_slot) {
             Ok(false)
         } else {
-            self.canonical_head
-                .fork_choice_read_lock()
-                .is_optimistic_or_invalid_block_no_fallback(block_root)
-                .map_err(BeaconChainError::ForkChoiceError)
+            let fork_choice = self.canonical_head.fork_choice_read_lock();
+            if fork_choice
+                .get_payload_execution_status(block_root)
+                .is_some()
+            {
+                let payload_status = fork_choice
+                    .get_canonical_payload_status(block_root, &self.spec)
+                    .map_err(BeaconChainError::ForkChoiceError)?;
+                fork_choice
+                    .is_optimistic_or_invalid_payload(block_root, payload_status)
+                    .map_err(BeaconChainError::ForkChoiceError)
+            } else {
+                fork_choice
+                    .is_optimistic_or_invalid_block_no_fallback(block_root)
+                    .map_err(BeaconChainError::ForkChoiceError)
+            }
         }
     }
 
@@ -7329,10 +7406,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         };
 
         // Check that the parent is NOT optimistic.
-        if let Some(execution_status) = self
-            .canonical_head
-            .fork_choice_read_lock()
-            .get_block_execution_status(parent_root)
+        if let Some(execution_status) = self.block_execution_status_for_duty(parent_root)?
             && execution_status.is_strictly_optimistic()
         {
             return Ok(ChainHealth::Optimistic);

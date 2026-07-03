@@ -3,8 +3,8 @@ use crate::{ForkChoiceStore, InvalidationOperation};
 use fixed_bytes::FixedBytesExtended;
 use logging::crit;
 use proto_array::{
-    Block as ProtoBlock, ExecutionStatus, JustifiedBalances, LatestMessage, PayloadStatus,
-    ProposerHeadError, ProposerHeadInfo, ProtoArrayForkChoice, ReOrgThreshold,
+    Block as ProtoBlock, ExecutionStatus, JustifiedBalances, LatestMessage, PayloadExecutionStatus,
+    PayloadStatus, ProposerHeadError, ProposerHeadInfo, ProtoArrayForkChoice, ReOrgThreshold,
 };
 use ssz_derive::{Decode, Encode};
 use state_processing::{
@@ -253,6 +253,14 @@ impl PayloadVerificationStatus {
             PayloadVerificationStatus::Verified => false,
             PayloadVerificationStatus::Optimistic => true,
             PayloadVerificationStatus::Irrelevant => false,
+        }
+    }
+
+    pub fn to_gloas_payload_execution_status(self) -> Result<PayloadExecutionStatus, Self> {
+        match self {
+            PayloadVerificationStatus::Verified => Ok(PayloadExecutionStatus::Valid),
+            PayloadVerificationStatus::Optimistic => Ok(PayloadExecutionStatus::Optimistic),
+            PayloadVerificationStatus::Irrelevant => Err(self),
         }
     }
 }
@@ -719,16 +727,44 @@ where
         }
     }
 
-    /// Mark a Gloas payload envelope as valid and received.
-    ///
-    /// This must only be called for valid Gloas payloads.
-    pub fn on_valid_payload_envelope_received(
+    /// Mark a Gloas payload envelope as received with the supplied execution status.
+    pub fn on_payload_envelope_imported(
         &mut self,
         block_root: Hash256,
+        payload_verification_status: PayloadVerificationStatus,
     ) -> Result<(), Error<T::Error>> {
+        let payload_execution_status = payload_verification_status
+            .to_gloas_payload_execution_status()
+            .map_err(|payload_verification_status| Error::InvalidPayloadStatus {
+                block_slot: self.get_block(&block_root).map_or(Slot::new(0), |b| b.slot),
+                block_root,
+                payload_verification_status,
+            })?;
         self.proto_array
-            .on_valid_payload_envelope_received(block_root)
+            .on_payload_envelope_imported(block_root, payload_execution_status)
             .map_err(Error::FailedToProcessValidExecutionPayload)
+    }
+
+    /// Mark the forkchoiceUpdated head payload as valid.
+    pub fn on_valid_forkchoice_payload(
+        &mut self,
+        block_root: Hash256,
+        head_payload_status: PayloadStatus,
+    ) -> Result<(), Error<T::Error>> {
+        if self
+            .proto_array
+            .get_payload_execution_status(&block_root)
+            .is_some()
+        {
+            if head_payload_status == PayloadStatus::Full {
+                self.proto_array
+                    .process_payload_envelope_validation(block_root)
+                    .map_err(Error::FailedToProcessValidExecutionPayload)?;
+            }
+            Ok(())
+        } else {
+            self.on_valid_execution_payload(block_root)
+        }
     }
 
     /// Pre-Gloas only.
@@ -1602,6 +1638,26 @@ where
             && self.is_finalized_checkpoint_or_descendant(*block_root)
     }
 
+    pub fn get_payload_execution_status(
+        &self,
+        block_root: &Hash256,
+    ) -> Option<PayloadExecutionStatus> {
+        if self.is_finalized_checkpoint_or_descendant(*block_root) {
+            self.proto_array.get_payload_execution_status(block_root)
+        } else {
+            None
+        }
+    }
+
+    pub fn execution_block_hash_to_beacon_block_root(
+        &self,
+        block_hash: &ExecutionBlockHash,
+    ) -> Option<Hash256> {
+        self.proto_array
+            .execution_block_hash_to_beacon_block_root(block_hash)
+            .filter(|root| self.is_finalized_checkpoint_or_descendant(*root))
+    }
+
     /// Returns `true` if the block's parent is imported (and, for a post-Gloas FULL child, its
     /// parent's payload is imported too). See [`Self::get_parent_import_status`].
     pub fn is_parent_imported(&self, block: &SignedBeaconBlock<E>) -> bool {
@@ -1663,6 +1719,30 @@ where
         }
     }
 
+    pub fn get_block_execution_status_for_payload(
+        &self,
+        block_root: &Hash256,
+        payload_status: PayloadStatus,
+    ) -> Option<ExecutionStatus> {
+        match self.get_payload_execution_status(block_root) {
+            Some(payload_execution_status) => {
+                let block_hash = self.get_block(block_root)?.execution_payload_block_hash?;
+                Some(if payload_status != PayloadStatus::Full {
+                    ExecutionStatus::irrelevant()
+                } else {
+                    match payload_execution_status {
+                        PayloadExecutionStatus::Missing | PayloadExecutionStatus::Optimistic => {
+                            ExecutionStatus::Optimistic(block_hash)
+                        }
+                        PayloadExecutionStatus::Valid => ExecutionStatus::Valid(block_hash),
+                        PayloadExecutionStatus::Invalid => ExecutionStatus::Invalid(block_hash),
+                    }
+                })
+            }
+            None => self.get_block_execution_status(block_root),
+        }
+    }
+
     /// Returns the canonical payload status of a block. See
     /// `ProtoArrayForkChoice::get_canonical_payload_status`.
     pub fn get_canonical_payload_status(
@@ -1683,6 +1763,18 @@ where
                 .map_err(Error::ProtoArrayError)
         } else {
             Err(Error::DoesNotDescendFromFinalizedCheckpoint)
+        }
+    }
+
+    pub fn is_optimistic_or_invalid_payload(
+        &self,
+        block_root: &Hash256,
+        payload_status: PayloadStatus,
+    ) -> Result<bool, Error<T::Error>> {
+        match self.get_payload_execution_status(block_root) {
+            Some(payload_execution_status) => Ok(payload_status == PayloadStatus::Full
+                && payload_execution_status.is_optimistic_or_invalid()),
+            None => self.is_optimistic_or_invalid_block_no_fallback(block_root),
         }
     }
 

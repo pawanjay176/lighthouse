@@ -12,7 +12,7 @@ use crate::{
     ExecutionPayloadError, PayloadVerificationError,
 };
 use execution_layer::{
-    BlockProposalContentsType, BuilderParams, NewPayloadRequest, PayloadAttributes,
+    BlockProposalContentsType, BuilderParams, ChainHealth, NewPayloadRequest, PayloadAttributes,
     PayloadParameters, PayloadStatus,
 };
 use fork_choice::{InvalidationOperation, PayloadVerificationStatus};
@@ -379,6 +379,12 @@ where
     if fork.gloas_enabled() {
         return Err(BlockProductionError::InvalidBlockVariant(
             "Called pre-gloas prepare_execution_payload on a gloas block".to_string(),
+        ));
+    }
+
+    if matches!(builder_params.chain_health, ChainHealth::Optimistic) {
+        return Err(BlockProductionError::InvalidBlockVariant(
+            "Refusing to produce a block while the head is optimistic".to_string(),
         ));
     }
 

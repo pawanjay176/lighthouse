@@ -110,6 +110,31 @@ pub enum PayloadStatus {
     Pending = 2,
 }
 
+/// Represents the execution-layer verification status of a Gloas payload envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
+#[ssz(enum_behaviour = "tag")]
+#[repr(u8)]
+pub enum PayloadExecutionStatus {
+    Missing = 0,
+    Optimistic = 1,
+    Valid = 2,
+    Invalid = 3,
+}
+
+impl PayloadExecutionStatus {
+    pub fn is_available(self) -> bool {
+        matches!(self, Self::Optimistic | Self::Valid)
+    }
+
+    pub fn is_optimistic_or_invalid(self) -> bool {
+        matches!(self, Self::Optimistic | Self::Invalid)
+    }
+
+    pub fn is_invalid(self) -> bool {
+        matches!(self, Self::Invalid)
+    }
+}
+
 /// Spec's `ForkChoiceNode` augmented with ProtoNode index.
 pub struct IndexedForkChoiceNode {
     pub root: Hash256,
@@ -526,16 +551,25 @@ impl ProtoArrayForkChoice {
         })
     }
 
-    /// Mark a Gloas payload envelope as valid and received.
-    ///
-    /// This must only be called for valid Gloas payloads.
-    pub fn on_valid_payload_envelope_received(
+    /// Mark a Gloas payload envelope as received with the supplied execution status.
+    pub fn on_payload_envelope_imported(
+        &mut self,
+        block_root: Hash256,
+        payload_execution_status: PayloadExecutionStatus,
+    ) -> Result<(), String> {
+        self.proto_array
+            .on_payload_envelope_imported(block_root, payload_execution_status)
+            .map_err(|e| format!("Failed to process execution payload: {:?}", e))
+    }
+
+    /// See `ProtoArray::propagate_payload_envelope_validation` for documentation.
+    pub fn process_payload_envelope_validation(
         &mut self,
         block_root: Hash256,
     ) -> Result<(), String> {
         self.proto_array
-            .on_valid_payload_envelope_received(block_root)
-            .map_err(|e| format!("Failed to process execution payload: {:?}", e))
+            .propagate_payload_envelope_validation(block_root)
+            .map_err(|e| format!("Failed to process valid payload envelope: {:?}", e))
     }
 
     /// See `ProtoArray::propagate_execution_payload_validation` for documentation.
@@ -1039,6 +1073,22 @@ impl ProtoArrayForkChoice {
         self.get_proto_node(block_root)
             .and_then(|node| node.payload_received().ok())
             .unwrap_or(false)
+    }
+
+    pub fn get_payload_execution_status(
+        &self,
+        block_root: &Hash256,
+    ) -> Option<PayloadExecutionStatus> {
+        self.get_proto_node(block_root)
+            .and_then(|node| node.payload_execution_status().ok())
+    }
+
+    pub fn execution_block_hash_to_beacon_block_root(
+        &self,
+        block_hash: &ExecutionBlockHash,
+    ) -> Option<Hash256> {
+        self.proto_array
+            .execution_block_hash_to_beacon_block_root(block_hash)
     }
 
     /// Returns the canonical payload status of a block, matching the decision

@@ -3154,7 +3154,10 @@ async fn weak_subjectivity_sync_test(
         beacon_chain
             .canonical_head
             .fork_choice_write_lock()
-            .on_valid_payload_envelope_received(wss_block_root)
+            .on_payload_envelope_imported(
+                wss_block_root,
+                fork_choice::PayloadVerificationStatus::Verified,
+            )
             .unwrap();
     }
 
@@ -3234,7 +3237,10 @@ async fn weak_subjectivity_sync_test(
             beacon_chain
                 .canonical_head
                 .fork_choice_write_lock()
-                .on_valid_payload_envelope_received(block_root)
+                .on_payload_envelope_imported(
+                    block_root,
+                    fork_choice::PayloadVerificationStatus::Verified,
+                )
                 .unwrap();
         }
 

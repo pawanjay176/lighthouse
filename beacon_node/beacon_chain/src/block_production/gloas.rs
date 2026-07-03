@@ -6,7 +6,7 @@ use proto_array::PayloadStatus;
 
 use bls::{PublicKeyBytes, Signature};
 use execution_layer::{
-    BlockProposalContentsGloas, BuilderParams, DEFAULT_GAS_LIMIT, PayloadAttributes,
+    BlockProposalContentsGloas, BuilderParams, ChainHealth, DEFAULT_GAS_LIMIT, PayloadAttributes,
     PayloadParameters,
 };
 use operation_pool::CompactAttestationRef;
@@ -1045,6 +1045,12 @@ where
         .execution_layer
         .as_ref()
         .ok_or(BlockProductionError::ExecutionLayerMissing)?;
+
+    if matches!(builder_params.chain_health, ChainHealth::Optimistic) {
+        return Err(BlockProductionError::InvalidBlockVariant(
+            "Refusing to produce a block while the head is optimistic".to_string(),
+        ));
+    }
 
     // Try to obtain the fork choice update parameters from the cached head.
     //

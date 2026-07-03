@@ -1,6 +1,7 @@
 use crate::proto_array_fork_choice::IndexedForkChoiceNode;
 use crate::{
-    Block, ExecutionStatus, JustifiedBalances, LatestMessage, PayloadStatus, error::Error,
+    Block, ExecutionStatus, JustifiedBalances, LatestMessage, PayloadExecutionStatus,
+    PayloadStatus, error::Error,
 };
 use fixed_bytes::FixedBytesExtended;
 use serde::{Deserialize, Serialize};
@@ -162,6 +163,9 @@ pub struct ProtoNode {
     /// Maps to `root in store.payload_states` in the spec.
     #[superstruct(only(V29), partial_getter(copy))]
     pub payload_received: bool,
+    /// Execution-layer status for this block's payload envelope.
+    #[superstruct(only(V29), partial_getter(copy))]
+    pub payload_execution_status: PayloadExecutionStatus,
     /// The proposer index for this block, used by `should_apply_proposer_boost`
     /// to detect equivocations at the parent's slot.
     #[superstruct(only(V29), partial_getter(copy))]
@@ -188,6 +192,11 @@ impl ProtoNode {
         self.get_parent_payload_status() == PayloadStatus::Full
     }
 
+    pub fn payload_is_available(&self) -> bool {
+        self.payload_execution_status()
+            .is_ok_and(PayloadExecutionStatus::is_available)
+    }
+
     pub fn attestation_score(&self, payload_status: PayloadStatus) -> u64 {
         match payload_status {
             PayloadStatus::Pending => self.weight(),
@@ -211,8 +220,9 @@ impl ProtoNode {
             });
         };
 
-        // Equivalent to `if not is_payload_verified(store, root)` in the spec.
-        if !node.payload_received {
+        // Equivalent to `if not is_payload_verified(store, root)` in the spec. Optimistic payloads
+        // are available for fork choice, but invalid payloads are not.
+        if !node.payload_execution_status.is_available() {
             return Ok(!timely);
         }
 
@@ -239,8 +249,9 @@ impl ProtoNode {
             });
         };
 
-        // Equivalent to `if not is_payload_verified(store, root)` in the spec.
-        if !node.payload_received {
+        // Equivalent to `if not is_payload_verified(store, root)` in the spec. Optimistic payloads
+        // are available for fork choice, but invalid payloads are not.
+        if !node.payload_execution_status.is_available() {
             return Ok(!available);
         }
 
@@ -647,6 +658,7 @@ impl ProtoArray {
                 payload_data_availability_votes: BitVector::default(),
                 ptc_participation: BitVector::default(),
                 payload_received: false,
+                payload_execution_status: PayloadExecutionStatus::Missing,
                 proposer_index,
                 // Spec: `record_block_timeliness` + `get_forkchoice_store`.
                 // Anchor gets [True, True]. Others computed from time_into_slot.
@@ -794,10 +806,14 @@ impl ProtoArray {
         Ok(!has_equivocation)
     }
 
-    /// Process a valid execution payload envelope for a Gloas block.
+    /// Process an execution payload envelope for a Gloas block.
     ///
-    /// Sets `payload_received` to true.
-    pub fn on_valid_payload_envelope_received(&mut self, block_root: Hash256) -> Result<(), Error> {
+    /// Sets `payload_received` to true when the payload is available for the Gloas Full branch.
+    pub fn on_payload_envelope_imported(
+        &mut self,
+        block_root: Hash256,
+        payload_execution_status: PayloadExecutionStatus,
+    ) -> Result<(), Error> {
         let index = *self
             .indices
             .get(&block_root)
@@ -809,9 +825,71 @@ impl ProtoArray {
         let v29 = node
             .as_v29_mut()
             .map_err(|_| Error::InvalidNodeVariant { block_root })?;
-        v29.payload_received = true;
+
+        if payload_execution_status.is_available() {
+            v29.payload_received = true;
+        }
+        v29.payload_execution_status = payload_execution_status;
 
         Ok(())
+    }
+
+    /// Mark a Gloas execution payload as valid.
+    pub fn propagate_payload_envelope_validation(
+        &mut self,
+        block_root: Hash256,
+    ) -> Result<(), Error> {
+        let index = *self
+            .indices
+            .get(&block_root)
+            .ok_or(Error::NodeUnknown(block_root))?;
+        self.propagate_payload_envelope_validation_by_index(index)
+    }
+
+    fn propagate_payload_envelope_validation_by_index(
+        &mut self,
+        verified_node_index: usize,
+    ) -> Result<(), Error> {
+        let mut next_hash = None;
+        let mut index = verified_node_index;
+
+        loop {
+            let node = self
+                .nodes
+                .get_mut(index)
+                .ok_or(Error::InvalidNodeIndex(index))?;
+            let block_root = node.root();
+            let v29 = node
+                .as_v29_mut()
+                .map_err(|_| Error::InvalidNodeVariant { block_root })?;
+
+            if let Some(expected_hash) = next_hash
+                && v29.execution_payload_block_hash != expected_hash
+            {
+                return Ok(());
+            }
+
+            match v29.payload_execution_status {
+                PayloadExecutionStatus::Valid => return Ok(()),
+                PayloadExecutionStatus::Invalid => {
+                    return Err(Error::ValidExecutionStatusBecameInvalid {
+                        block_root: v29.root,
+                        payload_block_hash: v29.execution_payload_block_hash,
+                    });
+                }
+                PayloadExecutionStatus::Missing | PayloadExecutionStatus::Optimistic => {
+                    v29.payload_received = true;
+                    v29.payload_execution_status = PayloadExecutionStatus::Valid;
+                }
+            }
+
+            next_hash = Some(v29.execution_payload_parent_hash);
+            if let Some(parent_index) = v29.parent {
+                index = parent_index;
+            } else {
+                return Ok(());
+            }
+        }
     }
 
     /// Updates the `block_root` and all ancestors to have validated execution payloads.
@@ -911,6 +989,7 @@ impl ProtoArray {
             .indices
             .get(&head_block_root)
             .ok_or(Error::NodeUnknown(head_block_root))?;
+        let mut expected_execution_block_hash = None;
 
         // Try to map the ancestor payload *hash* to an ancestor beacon block *root*.
         let latest_valid_ancestor_root = op
@@ -937,6 +1016,48 @@ impl ProtoArray {
                 .nodes
                 .get_mut(index)
                 .ok_or(Error::InvalidNodeIndex(index))?;
+
+            if let ProtoNode::V29(node) = node {
+                if let Some(expected_hash) = expected_execution_block_hash
+                    && node.execution_payload_block_hash != expected_hash
+                {
+                    break;
+                }
+
+                if !latest_valid_ancestor_is_descendant && node.root != head_block_root {
+                    break;
+                } else if op.latest_valid_ancestor() == Some(node.execution_payload_block_hash) {
+                    break;
+                }
+
+                if node.root != head_block_root
+                    || op.invalidate_block_root()
+                    || latest_valid_ancestor_is_descendant
+                {
+                    match node.payload_execution_status {
+                        PayloadExecutionStatus::Valid => {
+                            return Err(Error::ValidExecutionStatusBecameInvalid {
+                                block_root: node.root,
+                                payload_block_hash: node.execution_payload_block_hash,
+                            });
+                        }
+                        PayloadExecutionStatus::Optimistic
+                        | PayloadExecutionStatus::Missing
+                        | PayloadExecutionStatus::Invalid => {
+                            node.payload_execution_status = PayloadExecutionStatus::Invalid;
+                            invalidated_indices.insert(index);
+                        }
+                    }
+                }
+
+                expected_execution_block_hash = Some(node.execution_payload_parent_hash);
+                if let Some(parent_index) = node.parent {
+                    index = parent_index;
+                    continue;
+                } else {
+                    break;
+                }
+            }
 
             let node_execution_status = node.execution_status();
             match node_execution_status {
@@ -1031,7 +1152,27 @@ impl ProtoArray {
 
             if let Some(parent_index) = node.parent()
                 && invalidated_indices.contains(&parent_index)
+                && (node.as_v17().is_ok()
+                    || node.get_parent_payload_status() == PayloadStatus::Full)
             {
+                if let ProtoNode::V29(node) = node {
+                    match node.payload_execution_status {
+                        PayloadExecutionStatus::Valid => {
+                            return Err(Error::ValidExecutionStatusBecameInvalid {
+                                block_root: node.root,
+                                payload_block_hash: node.execution_payload_block_hash,
+                            });
+                        }
+                        PayloadExecutionStatus::Optimistic
+                        | PayloadExecutionStatus::Missing
+                        | PayloadExecutionStatus::Invalid => {
+                            node.payload_execution_status = PayloadExecutionStatus::Invalid;
+                        }
+                    }
+                    invalidated_indices.insert(index);
+                    continue;
+                }
+
                 match node.execution_status() {
                     Ok(ExecutionStatus::Valid(hash)) => {
                         return Err(Error::ValidExecutionStatusBecameInvalid {
@@ -1318,10 +1459,7 @@ impl ProtoArray {
             .get(proto_node_index)
             .ok_or(Error::InvalidNodeIndex(proto_node_index))?;
 
-        if !proto_node
-            .payload_received()
-            .map_err(|_| Error::InvalidNodeVariant { block_root: root })?
-        {
+        if !proto_node.payload_is_available() {
             return Ok(PayloadStatus::Empty);
         }
 
@@ -1513,8 +1651,8 @@ impl ProtoArray {
                 .get(node.proto_node_index)
                 .ok_or(Error::InvalidNodeIndex(node.proto_node_index))?;
             let mut children = vec![(node.with_status(PayloadStatus::Empty), proto_node.clone())];
-            // The FULL virtual child only exists if the payload has been received.
-            if proto_node.payload_received().is_ok_and(|received| received) {
+            // The FULL virtual child only exists if the payload is available.
+            if proto_node.payload_is_available() {
                 children.push((node.with_status(PayloadStatus::Full), proto_node.clone()));
             }
             Ok(children)
@@ -1637,7 +1775,7 @@ impl ProtoArray {
         };
 
         // Spec equivalent to `if not is_payload_verified(store, root): return False`
-        if !node.payload_received {
+        if !node.payload_execution_status.is_available() {
             return Ok(false);
         }
 
@@ -1911,10 +2049,14 @@ impl ProtoArray {
             .iter()
             .rev()
             .find(|node| {
-                node.execution_status()
+                node.execution_payload_block_hash()
                     .ok()
-                    .and_then(|execution_status| execution_status.block_hash())
                     .is_some_and(|node_block_hash| node_block_hash == *block_hash)
+                    || node
+                        .execution_status()
+                        .ok()
+                        .and_then(|execution_status| execution_status.block_hash())
+                        .is_some_and(|node_block_hash| node_block_hash == *block_hash)
             })
             .map(|node| node.root())
     }

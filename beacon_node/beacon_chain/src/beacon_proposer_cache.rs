@@ -263,11 +263,21 @@ pub fn compute_proposer_duties_from_head<T: BeaconChainTypes>(
         (head_state, head_state_root, head_block_root)
     };
 
-    let execution_status = chain
-        .canonical_head
-        .fork_choice_read_lock()
-        .get_block_execution_status(&head_block_root)
-        .ok_or(BeaconChainError::HeadMissingFromForkChoice(head_block_root))?;
+    let execution_status = {
+        let fork_choice = chain.canonical_head.fork_choice_read_lock();
+        if fork_choice
+            .get_payload_execution_status(&head_block_root)
+            .is_some()
+        {
+            let payload_status = fork_choice
+                .get_canonical_payload_status(&head_block_root, &chain.spec)
+                .map_err(BeaconChainError::ForkChoiceError)?;
+            fork_choice.get_block_execution_status_for_payload(&head_block_root, payload_status)
+        } else {
+            fork_choice.get_block_execution_status(&head_block_root)
+        }
+    }
+    .ok_or(BeaconChainError::HeadMissingFromForkChoice(head_block_root))?;
 
     // Advance the state into the requested epoch.
     ensure_state_can_determine_proposers_for_epoch(

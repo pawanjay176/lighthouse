@@ -1176,7 +1176,10 @@ impl<E: EthSpec> Tester<E> {
                 .chain
                 .canonical_head
                 .fork_choice_write_lock()
-                .on_valid_payload_envelope_received(block_root)
+                .on_payload_envelope_imported(
+                    block_root,
+                    fork_choice::PayloadVerificationStatus::Verified,
+                )
                 .map_err(|e| {
                     Error::InternalError(format!(
                         "on_execution_payload for block root {} failed: {:?}",

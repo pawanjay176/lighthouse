@@ -3149,7 +3149,10 @@ where
         self.chain
             .canonical_head
             .fork_choice_write_lock()
-            .on_valid_payload_envelope_received(block_root)
+            .on_payload_envelope_imported(
+                block_root,
+                fork_choice::PayloadVerificationStatus::Verified,
+            )
             .expect("should update fork choice with envelope");
 
         // Run fork choice because the envelope could become the head.
