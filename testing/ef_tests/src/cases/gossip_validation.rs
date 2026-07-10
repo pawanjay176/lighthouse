@@ -9,12 +9,12 @@ use beacon_chain::test_utils::{BeaconChainHarness, EphemeralHarnessType};
 use beacon_chain::{BlockError, NotifyExecutionLayer};
 use execution_layer::{PayloadStatusV1, PayloadStatusV1Status};
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerId};
-use network::NetworkBeaconProcessor;
+use network::{NetworkBeaconProcessor, NetworkMessage};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use types::{
     AttesterSlashing, BeaconState, BlobSchedule, BlockImportSource, ChainSpec, Checkpoint, EthSpec,
@@ -185,6 +185,7 @@ impl<E: EthSpec + TypeName> Case for GossipValidation<E> {
 struct GossipTester<E: EthSpec> {
     harness: BeaconChainHarness<EphemeralHarnessType<E>>,
     network_beacon_processor: Arc<NetworkBeaconProcessor<EphemeralHarnessType<E>>>,
+    network_rx: Mutex<tokio::sync::mpsc::UnboundedReceiver<NetworkMessage<E>>>,
     spec: ChainSpec,
     genesis_time: u64,
     current_time_ms: u64,
@@ -198,12 +199,13 @@ impl<E: EthSpec> GossipTester<E> {
 
         let (harness, initial_block_index) =
             Self::build_harness(case, spec.clone(), &blocks, genesis_time)?;
-        let network_beacon_processor =
-            Arc::new(NetworkBeaconProcessor::null_from_harness(&harness));
+        let (network_beacon_processor, network_rx) =
+            NetworkBeaconProcessor::null_from_harness(&harness);
 
         let tester = Self {
             harness,
-            network_beacon_processor,
+            network_beacon_processor: Arc::new(network_beacon_processor),
+            network_rx: Mutex::new(network_rx),
             spec: spec.as_ref().clone(),
             genesis_time,
             current_time_ms: case.meta.current_time_ms,
@@ -348,9 +350,11 @@ impl<E: EthSpec> GossipTester<E> {
             .ok_or_else(|| Error::FailedToParseTest("message time overflow".into()))?;
         let seen_duration = self.set_time_ms(time_ms)?;
 
+        let message_id = MessageId::new(&[]);
+        let peer_id = PeerId::random();
         let process_fn = Box::pin(self.network_beacon_processor.clone().process_gossip_block(
-            MessageId::new(&[]),
-            PeerId::random(),
+            message_id.clone(),
+            peer_id.clone(),
             Client::default(),
             block,
             self.network_beacon_processor.duplicate_cache.clone(),
@@ -358,7 +362,28 @@ impl<E: EthSpec> GossipTester<E> {
             seen_duration,
         ));
 
-        self.block_on_dangerous(process_fn)
+        self.block_on_dangerous(process_fn)?;
+
+        let mut network_rx = self
+            .network_rx
+            .lock()
+            .map_err(|_| Error::InternalError("network receiver lock poisoned".into()))?;
+        while let Ok(network_message) = network_rx.try_recv() {
+            if let NetworkMessage::ValidationResult {
+                propagation_source,
+                message_id: received_message_id,
+                validation_result,
+            } = network_message
+                && received_message_id == message_id
+                && propagation_source == peer_id
+            {
+                return Ok(validation_result);
+            }
+        }
+
+        Err(Error::InternalError(
+            "gossip block processing did not emit a validation result".into(),
+        ))
     }
 
     fn import_setup_block(

@@ -41,6 +41,7 @@ state_processing = { workspace = true }
 swap_or_not_shuffle = { workspace = true }
 tree_hash = { workspace = true }
 tree_hash_derive = { workspace = true }
+tokio = { workspace = true }
 typenum = { workspace = true }
 types = { workspace = true }
 yaml_serde = { workspace = true }
