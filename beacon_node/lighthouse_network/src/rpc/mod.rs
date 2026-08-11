@@ -225,35 +225,47 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
             return Ok(());
         }
 
-        self.send_response_inner(peer_id, request_type.protocol(), request_id, response);
+        self.send_response_inner(peer_id, request_id, response);
         Ok(())
     }
 
     fn send_response_inner(
         &mut self,
         peer_id: PeerId,
-        protocol: Protocol,
         request_id: InboundRequestId,
         response: RpcResponse<E>,
     ) {
-        if let Some(response_limiter) = self.response_limiter.as_mut()
-            && !response_limiter.allows(
-                peer_id,
-                protocol,
-                request_id.connection_id,
-                request_id.substream_id,
-                response.clone(),
-            )
-        {
-            // Response is logged and queued internally in the response limiter.
-            return;
-        }
-
         self.events.push(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(request_id.connection_id),
             event: RPCSend::Response(request_id.substream_id, response),
         });
+    }
+
+    fn emit_inbound_request(
+        &mut self,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+        request_id: InboundRequestId,
+        request_type: RequestType<E>,
+    ) {
+        // If we received a Ping, we queue a Pong response.
+        if matches!(&request_type, RequestType::Ping(_)) {
+            trace!(connection_id = %connection_id, %peer_id, "Received Ping, queueing Pong");
+            self.send_response(
+                request_id,
+                RpcResponse::Success(RpcSuccessResponse::Pong(Ping {
+                    data: self.seq_number,
+                })),
+            )
+            .expect("Request to exist");
+        }
+
+        self.events.push(ToSwarm::GenerateEvent(RPCMessage {
+            peer_id,
+            connection_id,
+            message: Ok(RPCReceived::Request(request_id, request_type)),
+        }));
     }
 
     /// Submits an RPC request.
@@ -391,7 +403,9 @@ where
                 .for_each(|request| request.peer_disconnected = true);
 
             if let Some(limiter) = self.response_limiter.as_mut() {
-                limiter.peer_disconnected(peer_id);
+                for request_id in limiter.peer_disconnected(peer_id) {
+                    self.active_inbound_requests.remove(&request_id);
+                }
             }
 
             // Replace the pending Requests to the disconnected peer
@@ -451,7 +465,6 @@ where
                     debug!(request = %request_type, protocol = %request_type.protocol(), %peer_id, "There is an active request with the same protocol");
                     self.send_response_inner(
                         peer_id,
-                        request_type.protocol(),
                         request_id,
                         RpcResponse::Error(
                             RpcErrorResponse::RateLimited,
@@ -472,23 +485,23 @@ where
                     },
                 );
 
-                // If we received a Ping, we queue a Pong response.
-                if let RequestType::Ping(_) = request_type {
-                    trace!(connection_id = %connection_id, %peer_id, "Received Ping, queueing Pong");
-                    self.send_response(
-                        request_id,
-                        RpcResponse::Success(RpcSuccessResponse::Pong(Ping {
-                            data: self.seq_number,
-                        })),
-                    )
-                    .expect("Request to exist");
+                let is_request_rate_limited =
+                    if let Some(response_limiter) = self.response_limiter.as_mut() {
+                        !response_limiter.allows(
+                            peer_id,
+                            connection_id,
+                            request_id,
+                            request_type.clone(),
+                        )
+                    } else {
+                        false
+                    };
+                if is_request_rate_limited {
+                    // Request is logged and queued internally in the response limiter.
+                    return;
                 }
 
-                self.events.push(ToSwarm::GenerateEvent(RPCMessage {
-                    peer_id,
-                    connection_id,
-                    message: Ok(RPCReceived::Request(request_id, request_type)),
-                }));
+                self.emit_inbound_request(peer_id, connection_id, request_id, request_type);
             }
             HandlerEvent::Ok(RPCReceived::Response(id, response)) => {
                 if response.protocol().terminator().is_none() {
@@ -540,14 +553,15 @@ where
 
     fn poll(&mut self, cx: &mut Context) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         if let Some(response_limiter) = self.response_limiter.as_mut()
-            && let Poll::Ready(responses) = response_limiter.poll_ready(cx)
+            && let Poll::Ready(requests) = response_limiter.poll_ready(cx)
         {
-            for response in responses {
-                self.events.push(ToSwarm::NotifyHandler {
-                    peer_id: response.peer_id,
-                    handler: NotifyHandler::One(response.connection_id),
-                    event: RPCSend::Response(response.substream_id, response.response),
-                });
+            for request in requests {
+                self.emit_inbound_request(
+                    request.peer_id,
+                    request.connection_id,
+                    request.inbound_request_id,
+                    request.request_type,
+                );
             }
         }
 

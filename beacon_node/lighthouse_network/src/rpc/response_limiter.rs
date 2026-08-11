@@ -1,8 +1,9 @@
 use crate::PeerId;
 use crate::rpc::config::InboundRateLimiterConfig;
+use crate::rpc::rate_limiter::RateLimiterItem;
 use crate::rpc::rate_limiter::{RPCRateLimiter, RateLimitedErr};
 use crate::rpc::self_limiter::timestamp_now;
-use crate::rpc::{Protocol, RpcResponse, SubstreamId};
+use crate::rpc::{InboundRequestId, Protocol, RequestType};
 use futures::FutureExt;
 use libp2p::swarm::ConnectionId;
 use logging::crit;
@@ -15,25 +16,25 @@ use tokio_util::time::DelayQueue;
 use tracing::debug;
 use types::{EthSpec, ForkContext};
 
-/// A response that was rate limited or waiting on rate limited responses for the same peer and
+/// A request that was rate limited or waiting on rate limited requests for the same peer and
 /// protocol.
 #[derive(Clone)]
-pub(super) struct QueuedResponse<E: EthSpec> {
+pub(super) struct QueuedRequest<E: EthSpec> {
     pub peer_id: PeerId,
     pub connection_id: ConnectionId,
-    pub substream_id: SubstreamId,
-    pub response: RpcResponse<E>,
+    pub inbound_request_id: InboundRequestId,
+    pub request_type: RequestType<E>,
     pub protocol: Protocol,
     pub queued_at: Duration,
 }
 
 pub(super) struct ResponseLimiter<E: EthSpec> {
-    /// Rate limiter for our responses.
+    /// Rate limiter for inbound requests, charged by their expected response count.
     limiter: RPCRateLimiter,
-    /// Responses queued for sending. These responses are stored when the response limiter rejects them.
-    delayed_responses: HashMap<(PeerId, Protocol), VecDeque<QueuedResponse<E>>>,
-    /// The delay required to allow a peer's outbound response per protocol.
-    next_response: DelayQueue<(PeerId, Protocol)>,
+    /// Requests queued for processing. These requests are stored when the limiter rejects them.
+    delayed_requests: HashMap<(PeerId, Protocol), VecDeque<QueuedRequest<E>>>,
+    /// The delay required to allow a peer's inbound request per protocol.
+    next_request: DelayQueue<(PeerId, Protocol)>,
 }
 
 impl<E: EthSpec> ResponseLimiter<E> {
@@ -44,118 +45,128 @@ impl<E: EthSpec> ResponseLimiter<E> {
     ) -> Result<Self, &'static str> {
         Ok(ResponseLimiter {
             limiter: RPCRateLimiter::new_with_config(config.0, fork_context)?,
-            delayed_responses: HashMap::new(),
-            next_response: DelayQueue::new(),
+            delayed_requests: HashMap::new(),
+            next_request: DelayQueue::new(),
         })
     }
 
-    /// Checks if the rate limiter allows the response. When not allowed, the response is delayed
-    /// until it can be sent.
+    /// Checks if the rate limiter allows the request. When not allowed, the request is delayed
+    /// until it can be processed.
     pub fn allows(
         &mut self,
         peer_id: PeerId,
-        protocol: Protocol,
         connection_id: ConnectionId,
-        substream_id: SubstreamId,
-        response: RpcResponse<E>,
+        inbound_request_id: InboundRequestId,
+        request_type: RequestType<E>,
     ) -> bool {
-        // First check that there are not already other responses waiting to be sent.
-        if let Some(queue) = self.delayed_responses.get_mut(&(peer_id, protocol)) {
-            debug!(%peer_id, %protocol, "Response rate limiting since there are already other responses waiting to be sent");
-            queue.push_back(QueuedResponse {
+        let protocol = request_type.protocol();
+
+        // First check that there are not already other requests waiting to be processed.
+        if let Some(queue) = self.delayed_requests.get_mut(&(peer_id, protocol)) {
+            debug!(%peer_id, %protocol, "Inbound request rate limiting since there are already other requests waiting to be processed");
+            queue.push_back(QueuedRequest {
                 peer_id,
                 connection_id,
-                substream_id,
-                response,
+                inbound_request_id,
+                request_type,
                 protocol,
                 queued_at: timestamp_now(),
             });
             return false;
         }
 
-        if let Err(wait_time) =
-            Self::try_limiter(&mut self.limiter, peer_id, response.clone(), protocol)
-        {
-            self.delayed_responses
+        if let Err(wait_time) = Self::try_limiter(&mut self.limiter, peer_id, &request_type) {
+            self.delayed_requests
                 .entry((peer_id, protocol))
                 .or_default()
-                .push_back(QueuedResponse {
+                .push_back(QueuedRequest {
                     peer_id,
                     connection_id,
-                    substream_id,
-                    response,
+                    inbound_request_id,
+                    request_type,
                     protocol,
                     queued_at: timestamp_now(),
                 });
-            self.next_response.insert((peer_id, protocol), wait_time);
+            self.next_request.insert((peer_id, protocol), wait_time);
             return false;
         }
 
         true
     }
 
-    /// Checks if the limiter allows the response. If the response should be delayed, the duration
+    /// Checks if the limiter allows the request. If the request should be delayed, the duration
     /// to wait is returned.
     fn try_limiter(
         limiter: &mut RPCRateLimiter,
         peer_id: PeerId,
-        response: RpcResponse<E>,
-        protocol: Protocol,
+        request_type: &RequestType<E>,
     ) -> Result<(), Duration> {
-        match limiter.allows(&peer_id, &(response.clone(), protocol)) {
+        match limiter.allows(&peer_id, request_type) {
             Ok(()) => Ok(()),
             Err(e) => match e {
                 RateLimitedErr::TooLarge => {
-                    // This should never happen with default parameters. Let's just send the response.
+                    // This should never happen with default parameters. Let's just process the request.
                     // Log a crit since this is a config issue.
                     crit!(
-                        %protocol,
-                        "Response rate limiting error for a batch that will never fit. Sending response anyway. Check configuration parameters."
+                        protocol = %request_type.protocol(),
+                        "Inbound request rate limiting error for a batch that will never fit. Processing request anyway. Check configuration parameters."
                     );
                     Ok(())
                 }
                 RateLimitedErr::TooSoon(wait_time) => {
-                    debug!(%peer_id, %protocol, wait_time_ms = wait_time.as_millis(), "Response rate limiting");
+                    debug!(%peer_id, protocol = %request_type.protocol(), wait_time_ms = wait_time.as_millis(), "Inbound request rate limiting");
                     Err(wait_time)
                 }
             },
         }
     }
 
-    /// Informs the limiter that a peer has disconnected. This removes any pending responses.
-    pub fn peer_disconnected(&mut self, peer_id: PeerId) {
-        self.delayed_responses
-            .retain(|(map_peer_id, _protocol), _queue| map_peer_id != &peer_id);
+    /// Informs the limiter that a peer has disconnected. This removes any pending requests and
+    /// returns their IDs.
+    pub fn peer_disconnected(&mut self, peer_id: PeerId) -> Vec<InboundRequestId> {
+        let mut dropped_requests = Vec::new();
+        self.delayed_requests
+            .retain(|(map_peer_id, _protocol), queue| {
+                if map_peer_id == &peer_id {
+                    dropped_requests.extend(queue.iter().map(|request| request.inbound_request_id));
+                    false
+                } else {
+                    true
+                }
+            });
+        dropped_requests
     }
 
-    /// When a peer and protocol are allowed to send a next response, this function checks the
-    /// queued responses and attempts marking as ready as many as the limiter allows.
-    pub fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Vec<QueuedResponse<E>>> {
-        let mut responses = vec![];
-        while let Poll::Ready(Some(expired)) = self.next_response.poll_expired(cx) {
+    /// When a peer and protocol are allowed to process a next request, this function checks the
+    /// queued requests and attempts marking as ready as many as the limiter allows.
+    pub fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Vec<QueuedRequest<E>>> {
+        let mut requests = vec![];
+        while let Poll::Ready(Some(expired)) = self.next_request.poll_expired(cx) {
             let (peer_id, protocol) = expired.into_inner();
 
-            if let Entry::Occupied(mut entry) = self.delayed_responses.entry((peer_id, protocol)) {
+            if let Entry::Occupied(mut entry) = self.delayed_requests.entry((peer_id, protocol)) {
                 let queue = entry.get_mut();
-                // Take delayed responses from the queue, as long as the limiter allows it.
-                while let Some(response) = queue.pop_front() {
+                // Take delayed requests from the queue, as long as the limiter allows it.
+                while let Some(request) = queue.pop_front() {
+                    debug_assert_eq!(request.protocol, protocol);
                     match Self::try_limiter(
                         &mut self.limiter,
-                        response.peer_id,
-                        response.response.clone(),
-                        response.protocol,
+                        request.peer_id,
+                        &request.request_type,
                     ) {
                         Ok(()) => {
                             metrics::observe_duration(
                                 &crate::metrics::RESPONSE_IDLING,
-                                timestamp_now().saturating_sub(response.queued_at),
+                                timestamp_now().saturating_sub(request.queued_at),
                             );
-                            responses.push(response)
+                            requests.push(request)
                         }
                         Err(wait_time) => {
-                            // The response was taken from the queue, but the limiter didn't allow it.
-                            queue.push_front(response);
-                            self.next_response.insert((peer_id, protocol), wait_time);
+                            // The request was taken from the queue, but the limiter didn't allow it.
+                            let request_protocol = request.protocol;
+                            queue.push_front(request);
+                            self.next_request
+                                .insert((peer_id, request_protocol), wait_time);
                             break;
                         }
                     }
@@ -169,8 +180,8 @@ impl<E: EthSpec> ResponseLimiter<E> {
         // Prune the rate limiter.
         let _ = self.limiter.poll_unpin(cx);
 
-        if !responses.is_empty() {
-            return Poll::Ready(responses);
+        if !requests.is_empty() {
+            return Poll::Ready(requests);
         }
         Poll::Pending
     }
