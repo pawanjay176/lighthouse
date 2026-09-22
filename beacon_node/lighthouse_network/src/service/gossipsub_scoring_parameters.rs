@@ -53,6 +53,11 @@ pub struct PeerScoreSettings<E: EthSpec> {
 }
 
 impl<E: EthSpec> PeerScoreSettings<E> {
+    pub fn set_slot_duration(&mut self, slot: Duration) {
+        self.slot = slot;
+        self.epoch = slot * E::slots_per_epoch() as u32;
+    }
+
     pub fn new(chain_spec: &ChainSpec, mesh_n: usize) -> PeerScoreSettings<E> {
         let slot = chain_spec.get_slot_duration();
         let beacon_attestation_subnet_weight = 1.0 / chain_spec.attestation_subnet_count as f64;

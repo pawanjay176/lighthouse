@@ -781,9 +781,14 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         let mut register_metrics_interval = tokio::time::interval(Duration::from_secs(5));
 
         // Trigger a sync state update every epoch. This helps check if we need to trigger a custody backfill sync.
-        let epoch_duration =
-            self.chain.slot_clock.slot_duration().as_secs() * T::EthSpec::slots_per_epoch();
-        let mut epoch_interval = tokio::time::interval(Duration::from_secs(epoch_duration));
+        let mut epoch_sleep = Box::pin(tokio::time::sleep(
+            self.chain
+                .slot_clock
+                .duration_to_next_epoch(T::EthSpec::slots_per_epoch())
+                .unwrap_or_else(|| {
+                    self.chain.slot_clock.slot_duration() * T::EthSpec::slots_per_epoch() as u32
+                }),
+        ));
 
         // process any inbound messages
         loop {
@@ -806,8 +811,11 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                     self.backfill_sync.register_metrics();
                     self.custody_backfill_sync.register_metrics();
                 }
-                _ = epoch_interval.tick() => {
+                _ = &mut epoch_sleep => {
                     self.update_sync_state();
+                    let next = self.chain.slot_clock.duration_to_next_epoch(T::EthSpec::slots_per_epoch())
+                        .unwrap_or_else(|| self.chain.slot_clock.slot_duration() * T::EthSpec::slots_per_epoch() as u32);
+                    epoch_sleep.as_mut().reset(tokio::time::Instant::now() + next);
                 }
             }
         }

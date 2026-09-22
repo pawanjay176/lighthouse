@@ -943,11 +943,15 @@ where
             .clone()
             .ok_or("system_time_slot_clock requires a chain spec")?;
 
-        let slot_clock = SystemTimeSlotClock::new(
+        let mut slot_clock = SystemTimeSlotClock::new(
             spec.genesis_slot,
             Duration::from_secs(genesis_time),
             spec.get_slot_duration(),
         );
+
+        if let Some((fork_slot, duration)) = spec.slot_duration_change::<E>() {
+            slot_clock = slot_clock.with_slot_duration_change(fork_slot, duration);
+        }
 
         self.slot_clock = Some(slot_clock);
         Ok(self)

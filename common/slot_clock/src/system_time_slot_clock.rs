@@ -44,7 +44,26 @@ impl SlotClock for SystemTimeSlotClock {
     }
 
     fn slot_duration(&self) -> Duration {
-        self.clock.slot_duration()
+        self.now()
+            .map(|slot| self.clock.slot_duration_at(slot))
+            .unwrap_or_else(|| self.clock.slot_duration_at(self.clock.genesis_slot()))
+    }
+
+    fn genesis_slot_duration(&self) -> Duration {
+        self.clock.genesis_slot_duration()
+    }
+
+    fn slot_duration_at(&self, slot: Slot) -> Duration {
+        self.clock.slot_duration_at(slot)
+    }
+
+    fn with_slot_duration_change(mut self, fork_slot: Slot, duration: Duration) -> Self {
+        self.clock = self.clock.with_slot_duration_change(fork_slot, duration);
+        self
+    }
+
+    fn slot_duration_change(&self) -> Option<(Slot, Duration)> {
+        self.clock.slot_duration_change()
     }
 
     fn duration_to_slot(&self, slot: Slot) -> Option<Duration> {

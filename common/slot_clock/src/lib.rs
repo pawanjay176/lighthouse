@@ -47,6 +47,20 @@ pub trait SlotClock: Send + Sync + Sized + Clone {
     /// Returns the duration between slots
     fn slot_duration(&self) -> Duration;
 
+    fn genesis_slot_duration(&self) -> Duration {
+        self.slot_duration()
+    }
+
+    /// Duration applicable to a particular slot.
+    fn slot_duration_at(&self, _slot: Slot) -> Duration {
+        self.slot_duration()
+    }
+
+    /// Configure a change in duration at a slot boundary.
+    fn with_slot_duration_change(self, _fork_slot: Slot, _duration: Duration) -> Self {
+        self
+    }
+
     /// Returns the duration from now until `slot`.
     fn duration_to_slot(&self, slot: Slot) -> Option<Duration>;
 
@@ -78,22 +92,20 @@ pub trait SlotClock: Send + Sync + Sized + Clone {
 
     /// Returns the `Duration` since the start of the current `Slot` at seconds precision. Useful in determining whether to apply proposer boosts.
     fn seconds_from_current_slot_start(&self) -> Option<Duration> {
-        self.now_duration()
-            .and_then(|now| now.checked_sub(self.genesis_duration()))
-            .map(|duration_into_slot| {
-                Duration::from_secs(duration_into_slot.as_secs() % self.slot_duration().as_secs())
-            })
+        let elapsed = self
+            .now_duration()?
+            .checked_sub(self.start_of(self.now()?)?)?;
+        Some(Duration::from_secs(elapsed.as_secs()))
     }
 
     /// Returns the `Duration` since the start of the current `Slot` at milliseconds precision.
     fn millis_from_current_slot_start(&self) -> Option<Duration> {
-        self.now_duration()
-            .and_then(|now| now.checked_sub(self.genesis_duration()))
-            .map(|duration_into_slot| {
-                Duration::from_millis(
-                    (duration_into_slot.as_millis() % self.slot_duration().as_millis()) as u64,
-                )
-            })
+        let elapsed = self
+            .now_duration()?
+            .checked_sub(self.start_of(self.now()?)?)?;
+        Some(Duration::from_millis(
+            u64::try_from(elapsed.as_millis()).ok()?,
+        ))
     }
 
     /// Produces a *new* slot clock with the same configuration of `self`, except that clock is
@@ -101,13 +113,20 @@ pub trait SlotClock: Send + Sync + Sized + Clone {
     ///
     /// This is useful for observing the slot clock at arbitrary fixed points in time.
     fn freeze_at(&self, freeze_at: Duration) -> ManualSlotClock {
-        let slot_clock = ManualSlotClock::new(
+        let mut slot_clock = ManualSlotClock::new(
             self.genesis_slot(),
             self.genesis_duration(),
-            self.slot_duration(),
+            self.genesis_slot_duration(),
         );
+        if let Some((slot, duration)) = self.slot_duration_change() {
+            slot_clock = slot_clock.with_slot_duration_change(slot, duration);
+        }
         slot_clock.set_current_time(freeze_at);
         slot_clock
+    }
+
+    fn slot_duration_change(&self) -> Option<(Slot, Duration)> {
+        None
     }
 }
 

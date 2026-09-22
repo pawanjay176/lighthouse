@@ -994,7 +994,9 @@ fn get_activation_exit_churn_limit(
     state_ctxt: &StateContext,
     spec: &ChainSpec,
 ) -> Result<u64, Error> {
-    let max_limit = if state_ctxt.fork_name.gloas_enabled() {
+    let max_limit = if state_ctxt.fork_name >= ForkName::Heze && spec.has_quick_slots() {
+        170_666_666_666
+    } else if state_ctxt.fork_name.gloas_enabled() {
         spec.max_per_epoch_activation_churn_limit_gloas
     } else {
         spec.max_per_epoch_activation_exit_churn_limit
@@ -1007,13 +1009,9 @@ fn get_activation_exit_churn_limit(
 
 fn get_balance_churn_limit(state_ctxt: &StateContext, spec: &ChainSpec) -> Result<u64, Error> {
     let total_active_balance = state_ctxt.total_active_balance;
-    let quotient = if state_ctxt.fork_name.gloas_enabled() {
-        spec.churn_limit_quotient_gloas
-    } else {
-        spec.churn_limit_quotient
-    };
+    let quotient = spec.churn_limit_quotient_for_fork(state_ctxt.fork_name);
     let churn = std::cmp::max(
-        spec.min_per_epoch_churn_limit_electra,
+        spec.min_per_epoch_churn_limit_for_fork(state_ctxt.fork_name),
         total_active_balance.safe_div(quotient)?,
     );
 

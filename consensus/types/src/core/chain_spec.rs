@@ -102,6 +102,8 @@ pub struct ChainSpec {
     seconds_per_slot: u64,
     // Private so that this value can't get changed except via the `set_slot_duration_ms` function.
     slot_duration_ms: u64,
+    /// Slot duration from the Heze activation slot, if this network opts in.
+    pub heze_slot_duration_ms: Option<u64>,
     pub min_attestation_inclusion_delay: u64,
     pub min_seed_lookahead: Epoch,
     pub max_seed_lookahead: Epoch,
@@ -470,12 +472,49 @@ impl ChainSpec {
     }
 
     pub fn inactivity_penalty_quotient_for_fork(&self, fork_name: ForkName) -> u64 {
-        if fork_name >= ForkName::Bellatrix {
+        if fork_name >= ForkName::Heze && self.has_quick_slots() {
+            37_748_736
+        } else if fork_name >= ForkName::Bellatrix {
             self.inactivity_penalty_quotient_bellatrix
         } else if fork_name >= ForkName::Altair {
             self.inactivity_penalty_quotient_altair
         } else {
             self.inactivity_penalty_quotient
+        }
+    }
+
+    pub fn has_quick_slots(&self) -> bool {
+        self.slot_duration_ms == 12_000 && self.heze_slot_duration_ms == Some(8_000)
+    }
+
+    pub fn base_reward_factor_for_fork(&self, fork_name: ForkName) -> u64 {
+        if fork_name >= ForkName::Heze && self.has_quick_slots() {
+            42
+        } else {
+            self.base_reward_factor
+        }
+    }
+
+    pub fn min_per_epoch_churn_limit_for_fork(&self, fork_name: ForkName) -> u64 {
+        if fork_name >= ForkName::Heze && self.has_quick_slots() {
+            85_333_333_333
+        } else {
+            self.min_per_epoch_churn_limit_electra
+        }
+    }
+
+    pub fn churn_limit_quotient_for_fork(&self, fork_name: ForkName) -> u64 {
+        if fork_name >= ForkName::Heze && self.has_quick_slots() {
+            // EIP-8198 does not name Gloas-specific churn quotients yet.
+            if fork_name.gloas_enabled() {
+                49_152
+            } else {
+                98_304
+            }
+        } else if fork_name.gloas_enabled() {
+            self.churn_limit_quotient_gloas
+        } else {
+            self.churn_limit_quotient
         }
     }
 
@@ -899,12 +938,25 @@ impl ChainSpec {
     /// Never uses the `blob_retention_epoch` for networks that started with Fulu enabled.
     pub fn min_epoch_data_availability_boundary(&self, current_epoch: Epoch) -> Option<Epoch> {
         let deneb_fork_epoch = self.deneb_fork_epoch?;
-        let blob_retention_epoch =
-            current_epoch.saturating_sub(self.min_epochs_for_blob_sidecars_requests);
+        let quick_slots = self
+            .heze_fork_epoch
+            .is_some_and(|epoch| current_epoch >= epoch)
+            && self.has_quick_slots();
+        let blob_window = if quick_slots {
+            6_144
+        } else {
+            self.min_epochs_for_blob_sidecars_requests
+        };
+        let column_window = if quick_slots {
+            6_144
+        } else {
+            self.min_epochs_for_data_column_sidecars_requests
+        };
+        let blob_retention_epoch = current_epoch.saturating_sub(blob_window);
         if let Some(fulu_fork_epoch) = self.fulu_fork_epoch
             && blob_retention_epoch >= fulu_fork_epoch
         {
-            Some(current_epoch.saturating_sub(self.min_epochs_for_data_column_sidecars_requests))
+            Some(current_epoch.saturating_sub(column_window))
         } else {
             Some(std::cmp::max(deneb_fork_epoch, blob_retention_epoch))
         }
@@ -941,6 +993,9 @@ impl ChainSpec {
 
     /// Spec: `get_attestation_due_ms`. Returns the epoch-appropriate threshold.
     pub fn get_attestation_due<E: EthSpec>(&self, slot: Slot) -> Duration {
+        if self.fork_name_at_slot::<E>(slot) >= ForkName::Heze && self.has_quick_slots() {
+            return self.slot_component_at::<E>(slot, self.attestation_due_bps_gloas);
+        }
         if self.fork_name_at_slot::<E>(slot).gloas_enabled() {
             self.unaggregated_attestation_due_gloas
         } else {
@@ -953,13 +1008,24 @@ impl ChainSpec {
         self.payload_due
     }
 
+    pub fn get_payload_due_at<E: EthSpec>(&self, slot: Slot) -> Duration {
+        self.slot_component_at::<E>(slot, self.payload_due_bps)
+    }
+
     /// Spec: `get_payload_attestation_due_ms`.
     pub fn get_payload_attestation_due(&self) -> Duration {
         self.payload_attestation_due
     }
 
+    pub fn get_payload_attestation_due_at<E: EthSpec>(&self, slot: Slot) -> Duration {
+        self.slot_component_at::<E>(slot, self.payload_attestation_due_bps)
+    }
+
     /// Spec: `get_aggregate_attestation_due_ms`. Returns the epoch-appropriate threshold.
     pub fn get_aggregate_attestation_due<E: EthSpec>(&self, slot: Slot) -> Duration {
+        if self.fork_name_at_slot::<E>(slot) >= ForkName::Heze && self.has_quick_slots() {
+            return self.slot_component_at::<E>(slot, self.aggregate_due_bps_gloas);
+        }
         if self.fork_name_at_slot::<E>(slot).gloas_enabled() {
             self.aggregate_attestation_due_gloas
         } else {
@@ -969,6 +1035,9 @@ impl ChainSpec {
 
     /// Spec: `get_contribution_due_ms`. Returns the epoch-appropriate threshold.
     pub fn get_contribution_message_due<E: EthSpec>(&self, slot: Slot) -> Duration {
+        if self.fork_name_at_slot::<E>(slot) >= ForkName::Heze && self.has_quick_slots() {
+            return self.slot_component_at::<E>(slot, self.contribution_due_bps_gloas);
+        }
         if self.fork_name_at_slot::<E>(slot).gloas_enabled() {
             self.contribution_and_proof_due_gloas
         } else {
@@ -978,11 +1047,21 @@ impl ChainSpec {
 
     /// Spec: `get_sync_message_due_ms`. Returns the epoch-appropriate threshold.
     pub fn get_sync_message_due<E: EthSpec>(&self, slot: Slot) -> Duration {
+        if self.fork_name_at_slot::<E>(slot) >= ForkName::Heze && self.has_quick_slots() {
+            return self.slot_component_at::<E>(slot, self.sync_message_due_bps_gloas);
+        }
         if self.fork_name_at_slot::<E>(slot).gloas_enabled() {
             self.sync_message_due_gloas
         } else {
             self.sync_message_due
         }
+    }
+
+    fn slot_component_at<E: EthSpec>(&self, slot: Slot, bps: u64) -> Duration {
+        Duration::from_millis(
+            (self.get_slot_duration_at_slot::<E>(slot).as_millis() as u64).saturating_mul(bps)
+                / BASIS_POINTS,
+        )
     }
 
     /// Calculate the duration into a slot for a given slot component
@@ -1002,6 +1081,66 @@ impl ChainSpec {
         Duration::from_millis(self.slot_duration_ms)
     }
 
+    pub fn get_slot_duration_at_slot<E: EthSpec>(&self, slot: Slot) -> Duration {
+        let duration = if self.fork_name_at_slot::<E>(slot) >= ForkName::Heze {
+            self.heze_slot_duration_ms.unwrap_or(self.slot_duration_ms)
+        } else {
+            self.slot_duration_ms
+        };
+        Duration::from_millis(duration)
+    }
+
+    pub fn slot_duration_change<E: EthSpec>(&self) -> Option<(Slot, Duration)> {
+        let epoch = self.heze_fork_epoch?;
+        let duration = self.heze_slot_duration_ms?;
+        if duration == self.slot_duration_ms {
+            return None;
+        }
+        Some((
+            epoch.start_slot(E::slots_per_epoch()),
+            Duration::from_millis(duration),
+        ))
+    }
+
+    /// Milliseconds since genesis at the start of `slot`.
+    pub fn milliseconds_at_slot<E: EthSpec>(&self, slot: Slot) -> Result<u64, ArithError> {
+        let offset = slot.as_u64().safe_sub(self.genesis_slot.as_u64())?;
+        if let Some((fork_slot, duration)) = self.slot_duration_change::<E>() {
+            let fork_offset = fork_slot.as_u64().safe_sub(self.genesis_slot.as_u64())?;
+            offset
+                .min(fork_offset)
+                .safe_mul(self.slot_duration_ms)?
+                .safe_add(
+                    offset
+                        .saturating_sub(fork_offset)
+                        .safe_mul(duration.as_millis() as u64)?,
+                )
+        } else {
+            offset.safe_mul(self.slot_duration_ms)
+        }
+    }
+
+    pub fn first_heze_execution_gas_limit<E: EthSpec>(
+        &self,
+        parent_gas_limit: u64,
+        parent_timestamp: u64,
+        genesis_time: u64,
+    ) -> Option<u64> {
+        let fork_slot = self.slot_duration_change::<E>()?.0;
+        let activation_timestamp = genesis_time.checked_add(
+            self.milliseconds_at_slot::<E>(fork_slot)
+                .ok()?
+                .checked_div(1000)?,
+        )?;
+        if parent_timestamp < activation_timestamp {
+            parent_gas_limit
+                .checked_mul(self.heze_slot_duration_ms?)?
+                .checked_div(self.slot_duration_ms)
+        } else {
+            None
+        }
+    }
+
     /// Set the duration of a slot (in ms).
     pub fn set_slot_duration_ms<E: EthSpec>(mut self, slot_duration_ms: u64) -> Self {
         self.slot_duration_ms = slot_duration_ms;
@@ -1015,6 +1154,43 @@ impl ChainSpec {
     ///
     /// Panics if any computation fails (indicates invalid config).
     pub fn compute_derived_values<E: EthSpec>(mut self) -> Self {
+        assert!(
+            self.slot_duration_ms > 0,
+            "invalid chain spec: zero slot duration"
+        );
+        assert!(
+            self.heze_slot_duration_ms
+                .is_none_or(|duration| duration > 0),
+            "invalid chain spec: zero Heze slot duration"
+        );
+        if let Some(heze_epoch) = self.heze_fork_epoch
+            && let Some(new_duration) = self.heze_slot_duration_ms
+            && new_duration != self.slot_duration_ms
+        {
+            let old_max = self
+                .blob_schedule
+                .as_vec()
+                .iter()
+                .filter(|entry| entry.epoch < heze_epoch)
+                .max_by_key(|entry| entry.epoch)
+                .map(|entry| entry.max_blobs_per_block)
+                .unwrap_or(self.max_blobs_per_block_electra);
+            let new_max = old_max.saturating_mul(new_duration) / self.slot_duration_ms;
+            if self.blob_schedule.max_blobs_for_epoch(heze_epoch) != Some(new_max)
+                || self
+                    .blob_schedule
+                    .blob_parameters_for_epoch(heze_epoch)
+                    .is_none_or(|entry| entry.epoch != heze_epoch)
+            {
+                let mut schedule = self.blob_schedule.as_vec().clone();
+                schedule.retain(|entry| entry.epoch != heze_epoch);
+                schedule.push(BlobParameters {
+                    epoch: heze_epoch,
+                    max_blobs_per_block: new_max,
+                });
+                self.blob_schedule = BlobSchedule::new(schedule);
+            }
+        }
         assert!(
             self.attestation_due_bps <= BASIS_POINTS,
             "invalid chain spec: attestation_due_bps ({}) exceeds slot duration",
@@ -1214,6 +1390,7 @@ impl ChainSpec {
             genesis_delay: 604800, // 7 days
             seconds_per_slot: 12,
             slot_duration_ms: 12000,
+            heze_slot_duration_ms: Some(8000),
             min_attestation_inclusion_delay: 1,
             min_seed_lookahead: Epoch::new(1),
             max_seed_lookahead: Epoch::new(4),
@@ -1521,6 +1698,7 @@ impl ChainSpec {
             genesis_delay: 300,
             seconds_per_slot: 6,
             slot_duration_ms: 6000,
+            heze_slot_duration_ms: None,
             inactivity_penalty_quotient: u64::checked_pow(2, 25).expect("pow does not overflow"),
             min_slashing_penalty_quotient: 64,
             proportional_slashing_multiplier: 2,
@@ -1670,6 +1848,7 @@ impl ChainSpec {
             genesis_delay: 6000, // 100 minutes
             seconds_per_slot: 5,
             slot_duration_ms: 5000,
+            heze_slot_duration_ms: None,
             min_attestation_inclusion_delay: 1,
             min_seed_lookahead: Epoch::new(1),
             max_seed_lookahead: Epoch::new(4),
@@ -2166,6 +2345,8 @@ pub struct Config {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     slot_duration_ms: Option<MaybeQuoted<u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    heze_slot_duration_ms: Option<MaybeQuoted<u64>>,
     #[serde(with = "serde_utils::quoted_u64")]
     seconds_per_eth1_block: u64,
     #[serde(with = "serde_utils::quoted_u64")]
@@ -2861,6 +3042,9 @@ impl Config {
             slot_duration_ms: Some(MaybeQuoted {
                 value: spec.slot_duration_ms,
             }),
+            heze_slot_duration_ms: spec
+                .heze_slot_duration_ms
+                .map(|value| MaybeQuoted { value }),
             seconds_per_eth1_block: spec.seconds_per_eth1_block,
             min_validator_withdrawability_delay: spec.min_validator_withdrawability_delay,
             shard_committee_period: spec.shard_committee_period,
@@ -2989,6 +3173,7 @@ impl Config {
             heze_fork_epoch,
             seconds_per_slot,
             slot_duration_ms,
+            heze_slot_duration_ms,
             seconds_per_eth1_block,
             min_validator_withdrawability_delay,
             shard_committee_period,
@@ -3103,6 +3288,7 @@ impl Config {
             slot_duration_ms: slot_duration_ms
                 .map(|q| q.value)
                 .or_else(|| seconds_per_slot.map(|q| q.value.saturating_mul(1000)))?,
+            heze_slot_duration_ms: heze_slot_duration_ms.map(|q| q.value),
             seconds_per_eth1_block,
             min_validator_withdrawability_delay,
             shard_committee_period,
@@ -3203,7 +3389,88 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MinimalEthSpec;
     use itertools::Itertools;
+
+    #[test]
+    fn quick_slots_heze_boundary() {
+        let mut spec = ChainSpec::mainnet();
+        spec.gloas_fork_epoch = Some(Epoch::new(419_072));
+        spec.heze_fork_epoch = Some(Epoch::new(419_073));
+        let spec = spec.compute_derived_values::<MainnetEthSpec>();
+        let heze_slot = Epoch::new(419_073).start_slot(MainnetEthSpec::slots_per_epoch());
+        assert_eq!(
+            spec.milliseconds_at_slot::<MainnetEthSpec>(heze_slot)
+                .unwrap(),
+            heze_slot.as_u64() * 12_000
+        );
+        assert_eq!(
+            spec.milliseconds_at_slot::<MainnetEthSpec>(heze_slot + 2)
+                .unwrap(),
+            heze_slot.as_u64() * 12_000 + 16_000
+        );
+        assert_eq!(
+            spec.get_slot_duration_at_slot::<MainnetEthSpec>(heze_slot - 1),
+            Duration::from_secs(12)
+        );
+        assert_eq!(
+            spec.get_slot_duration_at_slot::<MainnetEthSpec>(heze_slot),
+            Duration::from_secs(8)
+        );
+        assert_eq!(spec.max_blobs_per_block(Epoch::new(419_073)), 14);
+        assert!(
+            spec.all_digest_epochs()
+                .any(|epoch| epoch == Epoch::new(419_073))
+        );
+        assert_ne!(
+            spec.compute_fork_digest(Hash256::ZERO, Epoch::new(419_072)),
+            spec.compute_fork_digest(Hash256::ZERO, Epoch::new(419_073))
+        );
+        assert_eq!(
+            spec.min_epoch_data_availability_boundary(Epoch::new(419_072)),
+            Some(Epoch::new(419_072 - 4_096))
+        );
+        assert_eq!(
+            spec.min_epoch_data_availability_boundary(Epoch::new(419_073)),
+            Some(Epoch::new(419_073 - 6_144))
+        );
+        assert_eq!(spec.base_reward_factor_for_fork(ForkName::Gloas), 64);
+        assert_eq!(spec.base_reward_factor_for_fork(ForkName::Heze), 42);
+        assert_eq!(spec.churn_limit_quotient_for_fork(ForkName::Heze), 49_152);
+        assert_eq!(
+            spec.inactivity_penalty_quotient_for_fork(ForkName::Heze),
+            37_748_736
+        );
+        let activation_time = spec
+            .milliseconds_at_slot::<MainnetEthSpec>(heze_slot)
+            .unwrap()
+            / 1000;
+        assert_eq!(
+            spec.first_heze_execution_gas_limit::<MainnetEthSpec>(
+                30_000_000,
+                activation_time - 12,
+                0
+            ),
+            Some(20_000_000)
+        );
+        assert_eq!(
+            spec.first_heze_execution_gas_limit::<MainnetEthSpec>(20_000_000, activation_time, 0),
+            None
+        );
+        let mut unchanged = ChainSpec::minimal();
+        unchanged.heze_fork_epoch = Some(Epoch::new(2));
+        let slot = Epoch::new(2).start_slot(MinimalEthSpec::slots_per_epoch());
+        assert_eq!(
+            unchanged.get_slot_duration_at_slot::<MinimalEthSpec>(slot),
+            Duration::from_secs(6)
+        );
+        let mut gnosis = ChainSpec::gnosis();
+        gnosis.heze_fork_epoch = Some(Epoch::new(2));
+        assert_eq!(
+            gnosis.get_slot_duration_at_slot::<MainnetEthSpec>(heze_slot),
+            Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn test_mainnet_spec_can_be_constructed() {

@@ -179,3 +179,44 @@ impl Default for ChainConfig {
         }
     }
 }
+
+impl ChainConfig {
+    pub fn prepare_payload_lookahead_for_slot(
+        &self,
+        initial_slot_duration: Duration,
+        slot_duration: Duration,
+    ) -> Duration {
+        if self.prepare_payload_lookahead
+            == initial_slot_duration / DEFAULT_PREPARE_PAYLOAD_LOOKAHEAD_FACTOR
+        {
+            slot_duration / DEFAULT_PREPARE_PAYLOAD_LOOKAHEAD_FACTOR
+        } else {
+            self.prepare_payload_lookahead
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_payload_lookahead_tracks_slot_duration() {
+        let mut config = ChainConfig::default();
+        assert_eq!(
+            config.prepare_payload_lookahead_for_slot(
+                Duration::from_secs(12),
+                Duration::from_secs(8)
+            ),
+            Duration::from_secs(8) / 3
+        );
+        config.prepare_payload_lookahead = Duration::from_secs(3);
+        assert_eq!(
+            config.prepare_payload_lookahead_for_slot(
+                Duration::from_secs(12),
+                Duration::from_secs(8)
+            ),
+            Duration::from_secs(3)
+        );
+    }
+}

@@ -954,7 +954,11 @@ where
                 3
             } else {
                 self.spec.min_validator_withdrawability_delay.as_u64()
-                    + self.spec.churn_limit_quotient / 2
+                    + self.spec.churn_limit_quotient_for_fork(
+                        self.spec.fork_name_at_slot::<E>(
+                            slot_clock.now().unwrap_or(self.spec.genesis_slot),
+                        ),
+                    ) / 2
             };
 
             match slot_clock.now() {

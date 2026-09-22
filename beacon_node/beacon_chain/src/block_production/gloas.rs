@@ -1144,6 +1144,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         let executed_ancestor_gas_limit = self
             .observed_execution_payloads
             .get_gas_limit(executed_ancestor_hash);
+        let executed_ancestor_timestamp = self
+            .observed_execution_payloads
+            .get_timestamp(executed_ancestor_hash);
 
         // Fan `getExecutionPayloadBid` out to the configured builders, validating each returned bid
         // against the production state, then turn each valid bid into a `Direct` selection candidate.
@@ -1179,6 +1182,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                                         executed_ancestor_hash,
                                         parent_root,
                                         executed_ancestor_gas_limit,
+                                        executed_ancestor_timestamp,
                                         &expected_builder_pubkeys,
                                         &proposer_preferences,
                                         &state,
@@ -1337,10 +1341,30 @@ where
         .get_suggested_fee_recipient(proposer_index)
         .await;
     let slot_number = Some(builder_params.slot.as_u64());
-    let target_gas_limit = execution_layer
+    let proposer_gas_limit = execution_layer
         .get_proposer_gas_limit(proposer_index)
         .await
         .unwrap_or(DEFAULT_GAS_LIMIT);
+    let target_gas_limit =
+        if fork.heze_enabled() && spec.slot_duration_change::<T::EthSpec>().is_some() {
+            let (parent_gas_limit, parent_timestamp) = chain
+                .observed_execution_payloads
+                .get_gas_limit(parent_block_hash)
+                .zip(
+                    chain
+                        .observed_execution_payloads
+                        .get_timestamp(parent_block_hash),
+                )
+                .ok_or(BlockProductionError::MissingParentExecutionPayload)?;
+            spec.first_heze_execution_gas_limit::<T::EthSpec>(
+                parent_gas_limit,
+                parent_timestamp,
+                chain.genesis_time,
+            )
+            .unwrap_or(proposer_gas_limit)
+        } else {
+            proposer_gas_limit
+        };
     let inclusion_list_transactions = if fork.heze_enabled() {
         // TODO(heze): populate from the inclusion list store
         Some(ProgressiveTransactions::empty())

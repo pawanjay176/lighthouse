@@ -10,12 +10,14 @@ const PAYLOAD_GAS_LIMIT_CACHE_CAPACITY: usize = 1_024;
 /// Gas limits from execution payloads observed during gossip validation, import, or startup.
 pub struct ObservedExecutionPayloads {
     gas_limits: RwLock<LruCache<ExecutionBlockHash, u64>>,
+    timestamps: RwLock<LruCache<ExecutionBlockHash, u64>>,
 }
 
 impl Default for ObservedExecutionPayloads {
     fn default() -> Self {
         Self {
             gas_limits: RwLock::new(LruCache::new(PAYLOAD_GAS_LIMIT_CACHE_CAPACITY)),
+            timestamps: RwLock::new(LruCache::new(PAYLOAD_GAS_LIMIT_CACHE_CAPACITY)),
         }
     }
 }
@@ -23,6 +25,23 @@ impl Default for ObservedExecutionPayloads {
 impl ObservedExecutionPayloads {
     pub fn get_gas_limit(&self, block_hash: ExecutionBlockHash) -> Option<u64> {
         self.gas_limits.read().peek(&block_hash).copied()
+    }
+
+    pub fn get_timestamp(&self, block_hash: ExecutionBlockHash) -> Option<u64> {
+        self.timestamps.read().peek(&block_hash).copied()
+    }
+
+    pub(crate) fn insert_payload(
+        &self,
+        block_hash: ExecutionBlockHash,
+        gas_limit: u64,
+        timestamp: u64,
+    ) {
+        self.insert(block_hash, gas_limit);
+        let mut timestamps = self.timestamps.write();
+        if !timestamps.contains_key(&block_hash) {
+            timestamps.insert(block_hash, timestamp);
+        }
     }
 
     pub(crate) fn insert(&self, block_hash: ExecutionBlockHash, gas_limit: u64) {
@@ -47,8 +66,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             if let Ok(payload) = block.body().execution_payload()
                 && payload.block_hash() != ExecutionBlockHash::zero()
             {
-                self.observed_execution_payloads
-                    .insert(payload.block_hash(), payload.gas_limit());
+                self.observed_execution_payloads.insert_payload(
+                    payload.block_hash(),
+                    payload.gas_limit(),
+                    payload.timestamp(),
+                );
             }
         } else if block.slot() == self.spec.genesis_slot {
             let bid = &block
@@ -56,12 +78,18 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 .signed_execution_payload_bid()
                 .map_err(BeaconChainError::BeaconStateError)?
                 .message;
-            self.observed_execution_payloads
-                .insert(bid.parent_block_hash, bid.gas_limit);
+            self.observed_execution_payloads.insert_payload(
+                bid.parent_block_hash,
+                bid.gas_limit,
+                head.snapshot.beacon_state.genesis_time(),
+            );
         } else if let Some(envelope) = head.snapshot.execution_envelope.as_ref() {
             let payload = &envelope.message.payload;
-            self.observed_execution_payloads
-                .insert(payload.block_hash, payload.gas_limit);
+            self.observed_execution_payloads.insert_payload(
+                payload.block_hash,
+                payload.gas_limit,
+                payload.timestamp,
+            );
         }
 
         Ok(())

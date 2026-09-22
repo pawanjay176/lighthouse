@@ -307,8 +307,11 @@ impl<T: BeaconChainTypes> GossipVerifiedEnvelope<T> {
 
         if !envelope_already_seen {
             let payload = &gossip_verified_envelope.signed_envelope.message.payload;
-            ctx.observed_execution_payloads
-                .insert(payload.block_hash, payload.gas_limit);
+            ctx.observed_execution_payloads.insert_payload(
+                payload.block_hash,
+                payload.gas_limit,
+                payload.timestamp,
+            );
 
             // Emit the SSE event once for the first observation from any source.
             if let Some(event_handler) = ctx.event_handler.as_ref()

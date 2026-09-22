@@ -410,11 +410,33 @@ impl<E: EthSpec> GossipVerifiedPayloadBid<E> {
             .ok_or(PayloadBidError::ParentExecutionPayloadUnknown {
                 parent_block_hash: signed_bid.message.parent_block_hash,
             })?;
-        if !is_gas_limit_target_compatible(
-            parent_gas_limit,
-            signed_bid.message.gas_limit,
-            proposer_preferences.message.target_gas_limit,
-        )? {
+        let fork_gas_limit = if ctx.spec.fork_name_at_slot::<T::EthSpec>(bid_slot)
+            >= types::ForkName::Heze
+            && ctx.spec.slot_duration_change::<T::EthSpec>().is_some()
+        {
+            let parent_timestamp = ctx
+                .observed_execution_payloads
+                .get_timestamp(signed_bid.message.parent_block_hash)
+                .ok_or(PayloadBidError::ParentExecutionPayloadUnknown {
+                    parent_block_hash: signed_bid.message.parent_block_hash,
+                })?;
+            ctx.spec.first_heze_execution_gas_limit::<T::EthSpec>(
+                parent_gas_limit,
+                parent_timestamp,
+                head_state.genesis_time(),
+            )
+        } else {
+            None
+        };
+        if !if let Some(expected) = fork_gas_limit {
+            signed_bid.message.gas_limit == expected
+        } else {
+            is_gas_limit_target_compatible(
+                parent_gas_limit,
+                signed_bid.message.gas_limit,
+                proposer_preferences.message.target_gas_limit,
+            )?
+        } {
             return Err(PayloadBidError::InvalidGasLimit);
         }
 

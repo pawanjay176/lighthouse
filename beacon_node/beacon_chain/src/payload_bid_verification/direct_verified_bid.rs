@@ -40,6 +40,7 @@ pub fn verify_direct_bid<E: EthSpec>(
     executed_ancestor_hash: ExecutionBlockHash,
     parent_block_root: Hash256,
     executed_ancestor_gas_limit: u64,
+    executed_ancestor_timestamp: Option<u64>,
     expected_builder_pubkeys: &BuilderPubkeys,
     proposer_preferences: &SignedProposerPreferences,
     state: &BeaconState<E>,
@@ -73,11 +74,31 @@ pub fn verify_direct_bid<E: EthSpec>(
     }
 
     // The gas limit must be compatible with the parent payload's, given the proposer's target.
-    if !is_gas_limit_target_compatible(
-        executed_ancestor_gas_limit,
-        bid.gas_limit,
-        proposer_preferences.message.target_gas_limit,
-    )? {
+    let heze_fork_block_gas_limit = if spec.fork_name_at_slot::<E>(proposal_slot)
+        >= types::ForkName::Heze
+        && spec.slot_duration_change::<E>().is_some()
+    {
+        let parent_timestamp =
+            executed_ancestor_timestamp.ok_or(PayloadBidError::ParentExecutionPayloadUnknown {
+                parent_block_hash: executed_ancestor_hash,
+            })?;
+        spec.first_heze_execution_gas_limit::<E>(
+            executed_ancestor_gas_limit,
+            parent_timestamp,
+            state.genesis_time(),
+        )
+    } else {
+        None
+    };
+    if !if let Some(expected) = heze_fork_block_gas_limit {
+        bid.gas_limit == expected
+    } else {
+        is_gas_limit_target_compatible(
+            executed_ancestor_gas_limit,
+            bid.gas_limit,
+            proposer_preferences.message.target_gas_limit,
+        )?
+    } {
         return Err(PayloadBidError::InvalidGasLimit);
     }
 
@@ -178,6 +199,7 @@ mod tests {
             ExecutionBlockHash::zero(),
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,
@@ -204,6 +226,7 @@ mod tests {
             ExecutionBlockHash::zero(),
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,
@@ -230,6 +253,7 @@ mod tests {
             ExecutionBlockHash::zero(),
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,
@@ -257,6 +281,7 @@ mod tests {
             ExecutionBlockHash::zero(),
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,
@@ -289,6 +314,7 @@ mod tests {
             executed_ancestor,
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,
@@ -318,6 +344,7 @@ mod tests {
             ExecutionBlockHash::zero(),
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,
@@ -347,6 +374,7 @@ mod tests {
             ExecutionBlockHash::zero(),
             Hash256::ZERO,
             EXECUTED_ANCESTOR_GAS_LIMIT,
+            None,
             &BuilderPubkeys::default(),
             &preferences(),
             &state,

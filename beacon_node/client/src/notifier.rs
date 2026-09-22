@@ -86,8 +86,13 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
             //
             // Keep remeasuring the offset rather than using an interval, so that we can correct
             // for system time clock adjustments.
+            let next_slot_duration = beacon_chain
+                .slot_clock
+                .now()
+                .map(|slot| beacon_chain.slot_clock.slot_duration_at(slot + 1))
+                .unwrap_or(slot_duration);
             let wait = match beacon_chain.slot_clock.duration_to_next_slot() {
-                Some(duration) => duration + slot_duration / 2,
+                Some(duration) => duration + next_slot_duration / 2,
                 None => {
                     warn!("Unable to read current slot");
                     sleep(slot_duration).await;
@@ -247,7 +252,10 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
                 let distance = format!(
                     "{} slots ({})",
                     sync_distance.as_u64(),
-                    slot_distance_pretty(sync_distance, slot_duration)
+                    slot_distance_pretty(
+                        sync_distance,
+                        beacon_chain.slot_clock.slot_duration_at(current_slot)
+                    )
                 );
 
                 let speed = speedo.slots_per_second();
@@ -291,7 +299,10 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
                 let distance = format!(
                     "{} slots ({})",
                     sync_distance.as_u64(),
-                    slot_distance_pretty(sync_distance, slot_duration)
+                    slot_distance_pretty(
+                        sync_distance,
+                        beacon_chain.slot_clock.slot_duration_at(current_slot)
+                    )
                 );
 
                 let speed = speedo.slots_per_second();
@@ -335,7 +346,10 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
                 let distance = format!(
                     "{} slots ({})",
                     sync_distance.as_u64(),
-                    slot_distance_pretty(sync_distance, slot_duration)
+                    slot_distance_pretty(
+                        sync_distance,
+                        beacon_chain.slot_clock.slot_duration_at(current_slot)
+                    )
                 );
 
                 let speed = speedo.slots_per_second();

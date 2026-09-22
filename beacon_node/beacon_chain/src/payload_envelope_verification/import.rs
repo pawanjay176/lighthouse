@@ -312,9 +312,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // This prevents inconsistency between the two at the expense of concurrency.
         drop(fork_choice);
 
-        self.observed_execution_payloads.insert(
+        self.observed_execution_payloads.insert_payload(
             signed_envelope.message.payload.block_hash,
             signed_envelope.message.payload.gas_limit,
+            signed_envelope.message.payload.timestamp,
         );
 
         // We're declaring the envelope "imported" at this point, since fork choice and the DB know

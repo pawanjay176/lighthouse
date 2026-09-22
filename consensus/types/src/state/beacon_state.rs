@@ -2546,7 +2546,7 @@ impl<E: EthSpec> BeaconState<E> {
             (self
                 .committee_cache(RelativeEpoch::Current)?
                 .active_validator_count() as u64)
-                .safe_div(spec.churn_limit_quotient)?,
+                .safe_div(spec.churn_limit_quotient_for_fork(self.fork_name_unchecked()))?,
         ))
     }
 
@@ -3138,13 +3138,10 @@ impl<E: EthSpec> BeaconState<E> {
     /// Return the churn limit for the current epoch.
     pub fn get_balance_churn_limit(&self, spec: &ChainSpec) -> Result<u64, BeaconStateError> {
         let total_active_balance = self.get_total_active_balance()?;
-        let quotient = if self.fork_name_unchecked().gloas_enabled() {
-            spec.churn_limit_quotient_gloas
-        } else {
-            spec.churn_limit_quotient
-        };
+        let fork_name = self.fork_name_unchecked();
+        let quotient = spec.churn_limit_quotient_for_fork(fork_name);
         let churn = std::cmp::max(
-            spec.min_per_epoch_churn_limit_electra,
+            spec.min_per_epoch_churn_limit_for_fork(fork_name),
             total_active_balance.safe_div(quotient)?,
         );
 
@@ -3159,7 +3156,9 @@ impl<E: EthSpec> BeaconState<E> {
         &self,
         spec: &ChainSpec,
     ) -> Result<u64, BeaconStateError> {
-        let max_limit = if self.fork_name_unchecked().gloas_enabled() {
+        let max_limit = if self.fork_name_unchecked() >= ForkName::Heze && spec.has_quick_slots() {
+            170_666_666_666
+        } else if self.fork_name_unchecked().gloas_enabled() {
             spec.max_per_epoch_activation_churn_limit_gloas
         } else {
             spec.max_per_epoch_activation_exit_churn_limit
@@ -3180,7 +3179,13 @@ impl<E: EthSpec> BeaconState<E> {
     pub fn get_consolidation_churn_limit(&self, spec: &ChainSpec) -> Result<u64, BeaconStateError> {
         if self.fork_name_unchecked().gloas_enabled() {
             let total_active_balance = self.get_total_active_balance()?;
-            let churn = total_active_balance.safe_div(spec.consolidation_churn_limit_quotient)?;
+            let quotient = if self.fork_name_unchecked() >= ForkName::Heze && spec.has_quick_slots()
+            {
+                98_304
+            } else {
+                spec.consolidation_churn_limit_quotient
+            };
+            let churn = total_active_balance.safe_div(quotient)?;
             Ok(churn.safe_sub(churn.safe_rem(spec.effective_balance_increment)?)?)
         } else {
             self.get_balance_churn_limit(spec)?

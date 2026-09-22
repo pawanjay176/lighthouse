@@ -171,13 +171,13 @@ fn attestation_deadline<E: EthSpec>(
 
 impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, T> {
     /// Starts the service which periodically produces attestations.
-    pub fn start_update_service(self, spec: &ChainSpec) -> Result<(), String> {
+    pub fn start_update_service(self, _spec: &ChainSpec) -> Result<(), String> {
         if self.disable {
             info!("Attestation service disabled");
             return Ok(());
         }
 
-        let slot_duration = spec.get_slot_duration();
+        let slot_duration = self.slot_clock.slot_duration();
         let duration_to_next_slot = self
             .slot_clock
             .duration_to_next_slot()
@@ -340,7 +340,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
                         .checked_add(self.chain_spec.get_attestation_due::<S::E>(slot))
                 })
                 .map(|next_slot_deadline| {
-                    next_slot_deadline.saturating_sub(self.chain_spec.get_slot_duration())
+                    next_slot_deadline.saturating_sub(self.slot_clock.slot_duration_at(slot))
                 })
                 .unwrap_or(Duration::from_secs(0));
             sleep(duration_to_deadline).await;
@@ -399,7 +399,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
         let aggregate_production_instant = Instant::now()
             + duration_to_next_slot
                 .checked_add(self.chain_spec.get_aggregate_attestation_due::<S::E>(slot))
-                .and_then(|offset| offset.checked_sub(self.chain_spec.get_slot_duration()))
+                .and_then(|offset| offset.checked_sub(self.slot_clock.slot_duration_at(slot)))
                 .unwrap_or_else(|| Duration::from_secs(0));
 
         let aggregate_duties_by_committee_index: HashMap<CommitteeIndex, Vec<DutyAndProof>> = self

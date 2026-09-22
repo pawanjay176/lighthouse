@@ -93,7 +93,11 @@ impl PreEpochCache {
         let total_active_balance =
             std::cmp::max(self.total_active_balance, spec.effective_balance_increment);
         let sqrt_total_active_balance = SqrtTotalActiveBalance::new(total_active_balance);
-        let base_reward_per_increment = BaseRewardPerIncrement::new(total_active_balance, spec)?;
+        let base_reward_per_increment = BaseRewardPerIncrement::new(
+            total_active_balance,
+            spec.fork_name_at_epoch(epoch),
+            spec,
+        )?;
 
         let effective_balance_increment = spec.effective_balance_increment;
         let max_effective_balance =

@@ -29,6 +29,7 @@ use lighthouse_network::{
     types::{GossipEncoding, GossipTopic, core_topics_to_subscribe},
 };
 use logging::crit;
+use slot_clock::SlotClock;
 use std::collections::BTreeSet;
 use std::{collections::HashSet, pin::Pin, sync::Arc, time::Duration};
 use store::HotColdDB;
@@ -818,7 +819,11 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             if let Some(active_validators) = active_validators_opt {
                 if self
                     .libp2p
-                    .update_gossipsub_parameters(active_validators, slot)
+                    .update_gossipsub_parameters(
+                        active_validators,
+                        slot,
+                        self.beacon_chain.slot_clock.slot_duration_at(slot),
+                    )
                     .is_err()
                 {
                     error!(active_validators, "Failed to update gossipsub parameters");
@@ -902,7 +907,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             // Set the next_unsubscribe delay.
             let unsubscribe_delay = Duration::from_secs(
                 UNSUBSCRIBE_DELAY_EPOCHS
-                    * self.beacon_chain.spec.get_slot_duration().as_secs()
+                    * self.beacon_chain.slot_clock.slot_duration().as_secs()
                     * T::EthSpec::slots_per_epoch(),
             );
 
@@ -953,9 +958,16 @@ fn next_digest_delay<T: BeaconChainTypes>(
 fn next_topic_subscriptions_delay<T: BeaconChainTypes>(
     beacon_chain: &BeaconChain<T>,
 ) -> Option<tokio::time::Sleep> {
-    if let Some((_, duration_to_epoch)) = beacon_chain.duration_to_next_digest() {
+    if let Some((next_epoch, duration_to_epoch)) = beacon_chain.duration_to_next_digest() {
+        let preceding_slot = next_epoch
+            .start_slot(T::EthSpec::slots_per_epoch())
+            .saturating_sub(1u64);
         let duration_to_subscription = duration_to_epoch.saturating_sub(Duration::from_secs(
-            beacon_chain.spec.get_slot_duration().as_secs() * SUBSCRIBE_DELAY_SLOTS,
+            beacon_chain
+                .slot_clock
+                .slot_duration_at(preceding_slot)
+                .as_secs()
+                * SUBSCRIBE_DELAY_SLOTS,
         ));
         if !duration_to_subscription.is_zero() {
             return Some(tokio::time::sleep(duration_to_subscription));

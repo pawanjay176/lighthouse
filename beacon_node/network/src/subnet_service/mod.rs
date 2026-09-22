@@ -441,7 +441,7 @@ impl<T: BeaconChainTypes> SubnetService<T> {
             return Ok(());
         }
 
-        let slot_duration = self.beacon_chain.slot_clock.slot_duration();
+        let slot_duration = self.beacon_chain.slot_clock.slot_duration_at(slot);
 
         // The short time we schedule the subscription before it's actually required. This
         // ensures we are subscribed on time, and allows consecutive subscriptions to the same

@@ -87,13 +87,13 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> SyncCommitteeService<S
             .unwrap_or(false)
     }
 
-    pub fn start_update_service(self, spec: &ChainSpec) -> Result<(), String> {
+    pub fn start_update_service(self, _spec: &ChainSpec) -> Result<(), String> {
         if self.duties_service.disable_attesting {
             info!("Sync committee service disabled");
             return Ok(());
         }
 
-        let slot_duration = spec.get_slot_duration();
+        let slot_duration = self.slot_clock.slot_duration();
         let duration_to_next_slot = self
             .slot_clock
             .duration_to_next_slot()
@@ -163,7 +163,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> SyncCommitteeService<S
         let aggregate_production_instant = Instant::now()
             + duration_to_next_slot
                 .checked_add(spec.get_contribution_message_due::<S::E>(slot))
-                .and_then(|offset| offset.checked_sub(spec.get_slot_duration()))
+                .and_then(|offset| offset.checked_sub(self.slot_clock.slot_duration_at(slot)))
                 .unwrap_or_else(|| Duration::from_secs(0));
 
         let Some(slot_duties) = self

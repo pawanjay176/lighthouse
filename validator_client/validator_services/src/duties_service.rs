@@ -1433,10 +1433,16 @@ async fn fill_in_selection_proofs<S: ValidatorStore + 'static, T: SlotClock + 's
 
     while !duties_by_slot.is_empty() {
         if let Some(duration) = slot_clock.duration_to_next_slot() {
-            sleep(
-                duration.saturating_sub(duties_service.selection_proof_config.computation_offset),
-            )
-            .await;
+            let next_slot_duration = slot_clock
+                .now()
+                .map(|slot| slot_clock.slot_duration_at(slot + 1))
+                .unwrap_or_else(|| slot_clock.slot_duration());
+            let base_duration = slot_clock.genesis_slot_duration();
+            let offset = duties_service
+                .selection_proof_config
+                .computation_offset
+                .mul_f64(next_slot_duration.as_secs_f64() / base_duration.as_secs_f64());
+            sleep(duration.saturating_sub(offset)).await;
 
             let Some(current_slot) = slot_clock.now() else {
                 continue;

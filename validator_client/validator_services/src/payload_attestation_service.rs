@@ -178,8 +178,13 @@ where
             let deadline = self
                 .slot_clock
                 .duration_to_slot(attestation_slot + 1)
-                .and_then(|d| d.checked_add(self.chain_spec.get_payload_attestation_due()))
-                .map(|d| d.saturating_sub(self.chain_spec.get_slot_duration()))
+                .and_then(|d| {
+                    d.checked_add(
+                        self.chain_spec
+                            .get_payload_attestation_due_at::<S::E>(attestation_slot),
+                    )
+                })
+                .map(|d| d.saturating_sub(self.slot_clock.slot_duration_at(attestation_slot)))
                 .unwrap_or_default();
             sleep(deadline).await;
             data_result = self
@@ -210,8 +215,7 @@ where
     }
 
     async fn wait_for_attestation_slot(&self) -> Option<Slot> {
-        let slot_duration = self.chain_spec.get_slot_duration();
-        let payload_attestation_due = self.chain_spec.get_payload_attestation_due();
+        let slot_duration = self.slot_clock.slot_duration();
 
         let Some(duration_to_next_slot) = self.slot_clock.duration_to_next_slot() else {
             error!("Failed to read slot clock");
@@ -229,6 +233,9 @@ where
         // So we evaluate if gloas is enabled at `current_slot + 1` to ensure that we don't
         // skip PTC duties at the fork slot.
         let attestation_slot = current_slot + 1;
+        let payload_attestation_due = self
+            .chain_spec
+            .get_payload_attestation_due_at::<S::E>(attestation_slot);
 
         if !self
             .chain_spec

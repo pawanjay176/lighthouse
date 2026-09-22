@@ -1051,7 +1051,9 @@ impl<E: EthSpec> Network<E> {
         &mut self,
         active_validators: usize,
         current_slot: Slot,
+        slot_duration: Duration,
     ) -> Result<(), String> {
+        self.score_settings.set_slot_duration(slot_duration);
         let (beacon_block_params, beacon_aggregate_proof_params, beacon_attestation_subnet_params) =
             self.score_settings
                 .get_dynamic_topic_params(active_validators, current_slot)?;

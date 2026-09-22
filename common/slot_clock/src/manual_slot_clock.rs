@@ -14,6 +14,7 @@ pub struct ManualSlotClock {
     current_time: Arc<RwLock<Duration>>,
     /// The length of each slot.
     slot_duration: Duration,
+    slot_duration_change: Option<(Slot, Duration)>,
 }
 
 impl Clone for ManualSlotClock {
@@ -23,19 +24,14 @@ impl Clone for ManualSlotClock {
             genesis_duration: self.genesis_duration,
             current_time: Arc::clone(&self.current_time),
             slot_duration: self.slot_duration,
+            slot_duration_change: self.slot_duration_change,
         }
     }
 }
 
 impl ManualSlotClock {
     pub fn set_slot(&self, slot: u64) {
-        let slots_since_genesis = slot
-            .checked_sub(self.genesis_slot.as_u64())
-            .expect("slot must be post-genesis")
-            .try_into()
-            .expect("slot must fit within a u32");
-        *self.current_time.write() =
-            self.genesis_duration + self.slot_duration * slots_since_genesis;
+        *self.current_time.write() = self.start_of(Slot::new(slot)).expect("valid slot");
     }
 
     pub fn set_current_time(&self, duration: Duration) {
@@ -99,6 +95,7 @@ impl SlotClock for ManualSlotClock {
             current_time: Arc::new(RwLock::new(genesis_duration)),
             genesis_duration,
             slot_duration,
+            slot_duration_change: None,
         }
     }
 
@@ -121,9 +118,16 @@ impl SlotClock for ManualSlotClock {
             let since_genesis = now
                 .checked_sub(genesis)
                 .expect("Control flow ensures now is greater than or equal to genesis");
-            let slot =
-                Slot::from((since_genesis.as_millis() / self.slot_duration.as_millis()) as u64);
-            Some(slot + self.genesis_slot)
+            let (elapsed, base_slot, duration) = match self.slot_duration_change {
+                Some((fork_slot, new_duration)) if self.start_of(fork_slot)? <= now => (
+                    now.checked_sub(self.start_of(fork_slot)?)?,
+                    fork_slot,
+                    new_duration,
+                ),
+                _ => (since_genesis, self.genesis_slot, self.slot_duration),
+            };
+            let offset = u64::try_from(elapsed.as_millis() / duration.as_millis()).ok()?;
+            Some(Slot::new(base_slot.as_u64().checked_add(offset)?))
         } else {
             None
         }
@@ -138,7 +142,33 @@ impl SlotClock for ManualSlotClock {
     }
 
     fn slot_duration(&self) -> Duration {
+        self.now()
+            .map(|slot| self.slot_duration_at(slot))
+            .unwrap_or(self.slot_duration)
+    }
+
+    fn genesis_slot_duration(&self) -> Duration {
         self.slot_duration
+    }
+
+    fn slot_duration_at(&self, slot: Slot) -> Duration {
+        match self.slot_duration_change {
+            Some((fork_slot, duration)) if slot >= fork_slot => duration,
+            _ => self.slot_duration,
+        }
+    }
+
+    fn with_slot_duration_change(mut self, fork_slot: Slot, duration: Duration) -> Self {
+        assert!(
+            duration.as_millis() > 0,
+            "slot duration must be at least 1ms"
+        );
+        self.slot_duration_change = Some((fork_slot, duration));
+        self
+    }
+
+    fn slot_duration_change(&self) -> Option<(Slot, Duration)> {
+        self.slot_duration_change
     }
 
     fn duration_to_slot(&self, slot: Slot) -> Option<Duration> {
@@ -147,14 +177,19 @@ impl SlotClock for ManualSlotClock {
 
     /// Returns the duration between UNIX epoch and the start of `slot`.
     fn start_of(&self, slot: Slot) -> Option<Duration> {
-        let slot = slot
-            .as_u64()
-            .checked_sub(self.genesis_slot.as_u64())?
-            .try_into()
-            .ok()?;
-        let unadjusted_slot_duration = self.slot_duration.checked_mul(slot)?;
-
-        self.genesis_duration.checked_add(unadjusted_slot_duration)
+        let slot_number = slot.as_u64().checked_sub(self.genesis_slot.as_u64())?;
+        let elapsed = if let Some((fork_slot, new_duration)) = self.slot_duration_change {
+            let fork_offset = fork_slot.as_u64().checked_sub(self.genesis_slot.as_u64())?;
+            let old_slots = slot_number.min(fork_offset);
+            let new_slots = slot_number.saturating_sub(fork_offset);
+            self.slot_duration
+                .checked_mul(u32::try_from(old_slots).ok()?)?
+                .checked_add(new_duration.checked_mul(u32::try_from(new_slots).ok()?)?)?
+        } else {
+            self.slot_duration
+                .checked_mul(u32::try_from(slot_number).ok()?)?
+        };
+        self.genesis_duration.checked_add(elapsed)
     }
 
     fn genesis_slot(&self) -> Slot {
@@ -169,6 +204,47 @@ impl SlotClock for ManualSlotClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_change_and_frozen_history() {
+        let clock = ManualSlotClock::new(
+            Slot::new(0),
+            Duration::from_secs(100),
+            Duration::from_secs(12),
+        )
+        .with_slot_duration_change(Slot::new(32), Duration::from_secs(8));
+        assert_eq!(
+            clock.start_of(Slot::new(31)),
+            Some(Duration::from_secs(472))
+        );
+        assert_eq!(
+            clock.start_of(Slot::new(32)),
+            Some(Duration::from_secs(484))
+        );
+        assert_eq!(
+            clock.start_of(Slot::new(34)),
+            Some(Duration::from_secs(500))
+        );
+        assert_eq!(clock.slot_of(Duration::from_secs(483)), Some(Slot::new(31)));
+        assert_eq!(clock.slot_of(Duration::from_secs(484)), Some(Slot::new(32)));
+        assert_eq!(clock.slot_of(Duration::from_secs(499)), Some(Slot::new(33)));
+        clock.set_current_time(Duration::from_secs(483));
+        assert_eq!(clock.duration_to_next_slot(), Some(Duration::from_secs(1)));
+        clock.set_current_time(Duration::from_secs(484));
+        assert_eq!(clock.duration_to_next_slot(), Some(Duration::from_secs(8)));
+        clock.set_current_time(Duration::from_secs(500));
+        let frozen = clock.freeze_at(Duration::from_secs(499));
+        assert_eq!(frozen.now(), Some(Slot::new(33)));
+        assert_eq!(
+            frozen.start_of(Slot::new(31)),
+            clock.start_of(Slot::new(31))
+        );
+        assert_eq!(frozen.slot_duration(), Duration::from_secs(8));
+        assert_eq!(
+            frozen.millis_from_current_slot_start(),
+            Some(Duration::from_secs(7))
+        );
+    }
 
     #[test]
     fn test_slot_now() {

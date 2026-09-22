@@ -2230,7 +2230,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // the envelopes_times_cache internally?
         // The payload is considered present only if it was observed before
         // the payload due deadline (PAYLOAD_DUE_BPS into the slot).
-        let payload_due = self.spec.get_payload_due();
+        let payload_due = self.spec.get_payload_due_at::<T::EthSpec>(request_slot);
         let payload_present = self
             .envelope_times_cache
             .read()
@@ -4719,8 +4719,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             && let Ok(payload) = block.body().execution_payload()
             && payload.block_hash() != ExecutionBlockHash::zero()
         {
-            self.observed_execution_payloads
-                .insert(payload.block_hash(), payload.gas_limit());
+            self.observed_execution_payloads.insert_payload(
+                payload.block_hash(),
+                payload.gas_limit(),
+                payload.timestamp(),
+            );
         }
 
         // We're declaring the block "imported" at this point, since fork choice and the DB know
@@ -6871,7 +6874,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // If we are close enough to the proposal slot, send an fcU, which will have payload
         // attributes filled in by the execution layer cache we just primed.
         if self.config.always_prepare_payload
-            || till_prepare_slot <= self.config.prepare_payload_lookahead
+            || till_prepare_slot
+                <= self.config.prepare_payload_lookahead_for_slot(
+                    self.slot_clock.genesis_slot_duration(),
+                    self.slot_clock.slot_duration_at(prepare_slot),
+                )
         {
             debug!(
                 ?till_prepare_slot,

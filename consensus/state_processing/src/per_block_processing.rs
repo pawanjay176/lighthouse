@@ -544,10 +544,9 @@ pub fn compute_timestamp_at_slot<E: EthSpec>(
     block_slot: Slot,
     spec: &ChainSpec,
 ) -> Result<u64, ArithError> {
-    let slots_since_genesis = block_slot.as_u64().safe_sub(spec.genesis_slot.as_u64())?;
-    slots_since_genesis
-        .safe_mul(spec.get_slot_duration().as_secs())
-        .and_then(|since_genesis| state.genesis_time().safe_add(since_genesis))
+    state
+        .genesis_time()
+        .safe_add(spec.milliseconds_at_slot::<E>(block_slot)?.safe_div(1000)?)
 }
 
 /// Process the parent block's deferred execution payload effects.
