@@ -10,7 +10,12 @@ use beacon_chain::slot_clock::{SlotClock, TestingSlotClock};
 use beacon_chain::test_utils::{BeaconChainHarness, EphemeralHarnessType};
 use beacon_chain::{BlockError, NotifyExecutionLayer};
 use bls::Signature;
-use execution_layer::{PayloadStatusV1, PayloadStatusV1Status};
+use execution_layer::{
+    PayloadStatusV1, PayloadStatusV1Status,
+    json_structures::{
+        JsonForkchoiceUpdatedV1Response, JsonPayloadStatusV1, JsonPayloadStatusV1Status,
+    },
+};
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerId};
 use network::{NetworkBeaconProcessor, NetworkMessage, ReprocessAllowance};
 use serde::Deserialize;
@@ -234,6 +239,29 @@ impl<E: EthSpec> GossipTester<E> {
 
         let (harness, initial_block_index) =
             Self::build_harness(case, spec.clone(), &blocks, genesis_time, current_time_ms)?;
+        if case.meta.topic == Topic::ExecutionPayloadBid {
+            // Bid fixtures provide CL state and synthetic execution hashes, not an execution
+            // chain. Bypass the mock block generator when updating the cached head.
+            harness
+                .mock_execution_layer
+                .as_ref()
+                .expect("mock execution layer is configured")
+                .server
+                .ctx
+                .hook
+                .lock()
+                .set_forkchoice_updated_hook(Box::new(|state, payload_attributes| {
+                    assert!(payload_attributes.is_none());
+                    Some(JsonForkchoiceUpdatedV1Response {
+                        payload_status: JsonPayloadStatusV1 {
+                            status: JsonPayloadStatusV1Status::Valid,
+                            latest_valid_hash: Some(state.head_block_hash),
+                            validation_error: None,
+                        },
+                        payload_id: None,
+                    })
+                }));
+        }
         let (network_beacon_processor, network_rx) =
             NetworkBeaconProcessor::null_from_harness_with_network_receiver(&harness);
 
